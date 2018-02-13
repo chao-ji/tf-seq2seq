@@ -11,8 +11,9 @@ class Seq2SeqDataset(object):
   def __init__(self,
       hparams,
       mode, 
-      src_file_placeholder=None, 
+      src_placeholder=None, 
       batch_size_placeholder=None):
+
     self._mode = mode
     self._src_vocab_table = tf.contrib.lookup.index_table_from_file(
         hparams.src_vocab_file, default_value=UNK_ID)
@@ -40,7 +41,7 @@ class Seq2SeqDataset(object):
     else:
       (self._initializer, self._src_input_ids, self._tgt_input_ids,
           self._tgt_output_ids, self._src_seq_lens, self._tgt_seq_lens
-          ) = self._get_infer_iterator(hparams, src_file_placeholder,
+          ) = self._get_infer_iterator(hparams, src_placeholder,
           batch_size_placeholder)
 
   @property
@@ -102,14 +103,14 @@ class Seq2SeqDataset(object):
 
   def _get_infer_iterator(self,
       hparams, 
-      src_file_placeholder, 
+      src_placeholder, 
       batch_size_placeholder):
-    if src_file_placeholder is None or batch_size_placeholder is None:
-      raise ValueError("`src_file_placeholder` and `batch_size_placeholder`", 
+    if src_placeholder is None or batch_size_placeholder is None:
+      raise ValueError("`src_placeholder` and `batch_size_placeholder`", 
           "must be provided in infer mode")
-    src_dataset = tf.data.TextLineDataset(src_file_placeholder)
-    src_vocab_table = self.src_vocab_table
+    src_dataset = tf.data.Dataset.from_tensor_slices(src_placeholder)
     batch_size = batch_size_placeholder
+    src_vocab_table = self.src_vocab_table
     src_max_len = hparams.src_max_len_infer
   
     src_eos_id = self.src_eos_id 
@@ -155,6 +156,8 @@ class Seq2SeqDataset(object):
       tgt_file = ".".join([hparams.dev_prefix, hparams.tgt])
       src_max_len = hparams.src_max_len_infer
       tgt_max_len = hparams.tgt_max_len_infer
+    else:
+      pass
 
     src_dataset = tf.data.TextLineDataset(src_file)
     tgt_dataset = tf.data.TextLineDataset(tgt_file)  
