@@ -34,6 +34,11 @@ class Seq2SeqDataset(object):
     self._tgt_eos_id = tf.cast(self.tgt_vocab_table.lookup(
         tf.constant(hparams.eos)), tf.int32)
 
+    # src_input_ids = [N, max_time_src]
+    # tgt_input_ids = [N, max_time_tgt]
+    # tgt_output_ids = [N, max_time_tgt]
+    # src_seq_lens = [N]
+    # tgt_seq_lens = [N]
     if mode != tf.contrib.learn.ModeKeys.INFER:
       (self._initializer, self._src_input_ids, self._tgt_input_ids,
           self._tgt_output_ids, self._src_seq_lens, self._tgt_seq_lens
@@ -73,10 +78,6 @@ class Seq2SeqDataset(object):
     return self._tgt_eos_id
 
   @property
-  def initializer(self):
-    return self._initializer
-
-  @property
   def src_input_ids(self):
     return self._src_input_ids
 
@@ -96,17 +97,29 @@ class Seq2SeqDataset(object):
   def tgt_seq_lens(self):
     return self._tgt_seq_lens
 
+  def get_max_time_src(self):
+    return tf.reduce_max(self.src_seq_lens)
+
+  def get_max_time_tgt(self):
+    return tf.reduce_max(self.tgt_seq_lens)
+
+  def get_word_count(self):
+    return tf.reduce_sum(self.src_seq_lens) + tf.reduce_sum(self.tgt_seq_lens)
+
+  def get_predict_count(self):
+    return tf.reduce_sum(self.tgt_seq_lens)
+
   def init_iterator(self, sess, feed_dict=None):
     if self.mode == tf.contrib.learn.ModeKeys.INFER and not feed_dict:
         raise ValueError("`feed_dict` can't be None in infer mode")
-    sess.run(self.initializer, feed_dict)
+    sess.run(self._initializer, feed_dict)
 
   def _get_infer_iterator(self,
-      hparams, 
-      src_placeholder, 
+      hparams,
+      src_placeholder,
       batch_size_placeholder):
     if src_placeholder is None or batch_size_placeholder is None:
-      raise ValueError("`src_placeholder` and `batch_size_placeholder`", 
+      raise ValueError("`src_placeholder` and `batch_size_placeholder`",
           "must be provided in infer mode")
     src_dataset = tf.data.Dataset.from_tensor_slices(src_placeholder)
     batch_size = batch_size_placeholder
@@ -253,15 +266,3 @@ class Seq2SeqDataset(object):
 
     return (batched_iter.initializer, src_input_ids, tgt_input_ids, 
         tgt_output_ids, src_seq_lens, tgt_seq_lens)
-
-
-def get_max_time(dataset):
-  return tf.reduce_max(dataset.tgt_seq_lens)
-
-
-def get_word_count(dataset):
-  return tf.reduce_sum(dataset.src_seq_lens) + tf.reduce_sum(dataset.tgt_seq_lens)
-
-
-def get_predict_count(dataset):
-  return tf.reduce_sum(dataset.tgt_seq_lens)
