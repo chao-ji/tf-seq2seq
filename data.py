@@ -111,7 +111,7 @@ class Seq2SeqDataset(object):
 
   def init_iterator(self, sess, feed_dict=None):
     if self.mode == tf.contrib.learn.ModeKeys.INFER and not feed_dict:
-        raise ValueError("`feed_dict` can't be None in infer mode")
+      raise ValueError("`feed_dict` must be provided in infer mode")
     sess.run(self._initializer, feed_dict)
 
   def _get_infer_iterator(self,
@@ -158,6 +158,8 @@ class Seq2SeqDataset(object):
         hparams,
         num_parallel_calls=4,
         output_buffer_size=None,
+        num_shards=1,
+        shard_index=0,
         reshuffle_each_iteration=True):
     if self.mode == tf.contrib.learn.ModeKeys.TRAIN:
       src_file = ".".join([hparams.train_prefix, hparams.src])
@@ -170,15 +172,14 @@ class Seq2SeqDataset(object):
       src_max_len = hparams.src_max_len_infer
       tgt_max_len = hparams.tgt_max_len_infer
     else:
-      pass
+      raise ValueError("Only train or eval mode expected for",
+          "`Seq2SeqDataset._get_iteraotr`")
 
     src_dataset = tf.data.TextLineDataset(src_file)
-    tgt_dataset = tf.data.TextLineDataset(tgt_file)  
+    tgt_dataset = tf.data.TextLineDataset(tgt_file)
     src_vocab_table = self.src_vocab_table
     tgt_vocab_table = self.tgt_vocab_table
     batch_size = hparams.batch_size
-    sos = hparams.sos
-    eos = hparams.eos
     random_seed = hparams.random_seed
     num_buckets = hparams.num_buckets
     src_eos_id = self.src_eos_id
@@ -188,6 +189,8 @@ class Seq2SeqDataset(object):
       output_buffer_size = batch_size * 1000
     
     src_tgt_dataset = tf.data.Dataset.zip((src_dataset, tgt_dataset))
+
+    src_tgt_dataset = src_tgt_dataset.shard(num_shards, shard_index)
 
     src_tgt_dataset = src_tgt_dataset.shuffle(
         output_buffer_size, random_seed, reshuffle_each_iteration)
@@ -242,6 +245,7 @@ class Seq2SeqDataset(object):
               0))
 
     if num_buckets > 1:
+      # mapper
       def key_func(unused_1, unused_2, unused_3, src_len, tgt_len):
         if src_max_len:
           bucket_width = (src_max_len + num_buckets - 1) // num_buckets
@@ -250,7 +254,7 @@ class Seq2SeqDataset(object):
 
         bucket_id = tf.maximum(src_len // bucket_width, tgt_len // bucket_width)
         return tf.to_int64(tf.minimum(num_buckets, bucket_id))
-
+      # reducer
       def reduce_func(unused_key, windowed_data):
         return batching_func(windowed_data)
 
