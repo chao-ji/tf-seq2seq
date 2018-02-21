@@ -102,7 +102,7 @@ class Seq2SeqModel(object):
       if self.mode != tf.contrib.learn.ModeKeys.INFER:
         loss = self._compute_loss(dataset, logits)
       else:
-        loss = tf.no_op() 
+        loss = tf.no_op()
 
     return logits, loss, states, sample_id
 
@@ -132,7 +132,8 @@ class Seq2SeqModel(object):
             dtype=self.dtype,
             # dataset.src_seq_lens = [N]
             sequence_length=dataset.src_seq_lens,
-            time_major=self.time_major)
+            time_major=self.time_major,
+            swap_memory=True)
       elif hparams.encoder_type == "bi":
         num_bi_layers = num_layers // 2
         num_bi_res_layers = num_res_layers // 2
@@ -158,9 +159,9 @@ class Seq2SeqModel(object):
             states.append(bi_states[0][l])
             states.append(bi_states[1][l])
           states = tuple(states)
-        # states = [state_tuple(c=[N, D], h=[N, D])]*NUM_LAYERS  
+        # states = [state_tuple(c=[N, D], h=[N, D])]*NUM_LAYERS
       else:
-        pass
+        raise ValueError("Unknown encoder_type: %s" % hparams.encoder_type)
     return outputs, states
 
   def _build_encoder_cell(self, hparams, num_layers, num_res_layers):
@@ -189,14 +190,18 @@ class Seq2SeqModel(object):
           outputs_encoder,
           # dataset.src_seq_lens = [N]
           dataset.src_seq_lens)
-      # decoder_init_state = [state_tuple(c=[N, D], h=[N, D])]*NUM_LAYERS
+
+      # NOTE: `decoder_init_state` is batch-tiled in INFER mode with beam search
+      # [state_tuple(c=[N(*B), D], h=[N(*B), D])]*NUM_LAYERS
       decoder_init_state = self._get_decoder_init_states(
           hparams,
           # states_encoder = [state_tuple(c=[N, D], h=[N, D])]*NUM_LAYERS
           states_encoder,
           cell)
+
       ####################
       # TRAIN or EVAL mode
+      ####################
       if self.mode != tf.contrib.learn.ModeKeys.INFER:
         # tgt_input_ids: [N, T]
         tgt_input_ids = dataset.tgt_input_ids
@@ -221,25 +226,28 @@ class Seq2SeqModel(object):
         # outputs.sample_id = [N, T] or [T, N] --- argmax(rnn_output, axis=2)
         #
         # if hparams.attention == ""
-        # states = [state_tuple(c=[N, D], h=[N, D])] * NUM_LAYERS
+        # states = [state_tuple(c=[N, D], h=[N, D])]*NUM_LAYERS
         # if hparams.attention != ""
         # states: tf.contrib.seq2seq.AttentionWrapperState
-        # states.cell_state = [state_tuple(c=[N, D], h=[N, D])] * NUM_LAYERS
+        #
+        # states.cell_state = [state_tuple(c=[N, D], h=[N, D])]*NUM_LAYERS
         # states.attention = [N, D]
         # states.time = []
-        # states.alignments = [N, T]
-        #
-        # decode_seq_lens = [N]
+        # states.alignments = [N, Tsrc]
+        # states.alignment_history = [Ttgt, N, Tsrc]
         outputs, states, decode_seq_lens = tf.contrib.seq2seq.dynamic_decode(
             decoder,
             output_time_major=self.time_major,
+            swap_memory=True,
             scope=scope)
         # sample_id = [N, T] or [T, N]
         sample_id = outputs.sample_id
         # logits = [N, T, V] or [T, N, V]
         logits = self._output_layer(outputs.rnn_output)
+
       ############
       # INFER mode
+      ############
       else:
         beam_width = hparams.beam_width
         length_penalty_weight = hparams.length_penalty_weight
@@ -247,7 +255,12 @@ class Seq2SeqModel(object):
         end_token = dataset.tgt_eos_id
 
         if beam_width > 0:
-          print("beam search")
+          # BEAM SEARCH MODE
+          # NOTE: In INFER mode with beam search, 
+          # `memory`, 
+          # `src_seq_lens`
+          # `states_encoder` must be batch-tiled
+          # Link: https://www.tensorflow.org/api_docs/python/tf/contrib/seq2seq/BeamSearchDecoder
           decoder = tf.contrib.seq2seq.BeamSearchDecoder(
               cell=cell,
               embedding=embed,
@@ -260,13 +273,13 @@ class Seq2SeqModel(object):
         else:
           sampling_temperature = hparams.sampling_temperature
           if sampling_temperature > 0.0:
-            print("sampling")
+            # SAMPLING MODE
             helper = tf.contrib.seq2seq.SampleEmbeddingHelper(
                 embed, start_tokens, end_token,
                 softmax_temperature=sampling_temperature,
                 seed=hparams.random_seed)
           else:
-            print("greedy")
+            #  GREEDY MODE 
             helper = tf.contrib.seq2seq.GreedyEmbeddingHelper(
                 embed, start_tokens, end_token)
 
@@ -278,11 +291,20 @@ class Seq2SeqModel(object):
 
         maximum_iterations = hparams.tgt_max_len_infer if \
             hparams.tgt_max_len_infer else 2 * dataset.get_max_time_src()
- 
+
+        # if beam_width > 0
+        # outputs: seq2seq.FinalBeamSearchDecoderOutput
+        # outputs.predicted_ids = [N, T, B] or [T, N, B]
+        # outputs.beam_search_decoder_output
+        # else
+        # outputs: seq2seq.BasicDecoderOutput
+        # outputs.rnn_output = [N, T, V] or [T, N, V] (output_layer applied)
+        # outputs.sample_id = [N, T] or [T, N] --- argmax(rnn_output, axis=2)
         outputs, states, decode_seq_lens = tf.contrib.seq2seq.dynamic_decode(
             decoder,
             maximum_iterations=maximum_iterations,
             output_time_major=self.time_major,
+            swap_memory=True,
             scope=scope)
 
         if beam_width > 0:
@@ -301,8 +323,11 @@ class Seq2SeqModel(object):
                           hparams,
                           num_layers,
                           num_res_layers,
-                          outputs_encoder,  # not used in non-attentional arch
-                          src_seq_lens):    # not used in non-attentional arch
+                          outputs_encoder,
+                          src_seq_lens):
+    # `outputs_encoder`
+    # `src_seq_lens`
+    # not used in non-attentional model architecture
     del outputs_encoder, src_seq_lens
     return model_helper.create_rnn_cell(
         hparams.unit_type,
@@ -318,7 +343,7 @@ class Seq2SeqModel(object):
         hparams.beam_width > 0)
 
   def _get_decoder_init_states(self, hparams, states_encoder, cell):
-    # `cell` not used in non-attentional arch
+    # `cell` not used in non-attentional model architecture
     del cell
     if self._use_tile_batch(hparams):
       return tf.contrib.seq2seq.tile_batch(states_encoder, hparams.beam_width)
@@ -345,7 +370,8 @@ class Seq2SeqModel(object):
         inputs,
         sequence_length=sequence_length,
         dtype=dtype,
-        time_major=self.time_major)
+        time_major=self.time_major,
+        swap_memory=True)
 
     return bi_outputs, bi_states
 
