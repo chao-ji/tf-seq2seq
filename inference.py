@@ -19,7 +19,7 @@ def translate_from_file(hparams, model_runner, sess, src_file, tgt_file=None):
   train._external_eval
   nmt_utils.decode_and_evaluate"""
   src_sents = load_src_sents(src_file)
-  tgt_sents = translate_from_data(hparams, model_runner, sess, src_sents, tgt_file=None)
+  tgt_sents = translate_from_data(hparams, model_runner, sess, src_sents, tgt_file)
 
   return tgt_sents
 
