@@ -22,9 +22,12 @@ class AttentionModel(model.Seq2SeqModel):
     beam_width = hparams.beam_width
 
     memory = outputs_encoder
+    # `memory` must be in BATCH major for attentional architecture
+    # if "uni", memory = [N, T, D]
+    # if "bi", memory = [N, T, 2D]
     if self.time_major:
-      memory = tf.transpose(memory, [1, 0, 2]) 
-
+      memory = tf.transpose(memory, [1, 0, 2])
+    
     if self._use_tile_batch(hparams):
       memory = tf.contrib.seq2seq.tile_batch(memory, beam_width)
       src_seq_lens = tf.contrib.seq2seq.tile_batch(src_seq_lens, beam_width)
@@ -41,6 +44,9 @@ class AttentionModel(model.Seq2SeqModel):
         hparams.dropout,
         self.mode)
 
+    # Currently `alignment_history` can't be enabled in beam search mode
+    # as of TensorFlow 1.5.0
+    # Link: https://github.com/tensorflow/tensorflow/issues/13154
     alignment_history = (self.mode == tf.contrib.learn.ModeKeys.INFER and
                          beam_width == 0)
 
@@ -75,7 +81,7 @@ def _create_attention_mechanism(attention_option,
 
   if attention_option == "luong":
     attention_mechanism = tf.contrib.seq2seq.LuongAttention(
-        num_units, memory, memory_sequence_length=source_sequence_length)
+        num_units, memory, memory_sequence_length=src_seq_lens)
   elif attention_option == "scaled_luong":
     attention_mechanism = tf.contrib.seq2seq.LuongAttention(
         num_units,
@@ -94,4 +100,15 @@ def _create_attention_mechanism(attention_option,
   else:
     raise ValueError("Unknown attention option %s" % attention_option) 
 
-  return attention_mechanism 
+  return attention_mechanism
+
+def _create_attention_image_summary(decoder_final_states):
+  # `decoder_final_state`: seq2seq.AttentionWrapperState
+  attention_images = decoder_final_states.alignment_history.stack()
+
+  attention_images = tf.expand_dims(
+      tf.transpose(attention_image, [1, 2, 0]), -1)
+
+  attention_image *= 255
+  attention_summary = tf.summary.image("attention_images", attention_images)
+  return attention_summary
