@@ -10,11 +10,10 @@ import model_helper
 
 class Seq2SeqModel(object):
 
-  def __init__(self, hparams, dataset, mode, dtype=tf.float32, scope=None):
+  def __init__(self, hparams, dataset, mode, scope=None):
 
     assert isinstance(dataset, data.Seq2SeqDataset)
     self._mode = mode
-    self._dtype = dtype
     self._time_major = hparams.time_major
 
     self._num_encoder_layers = hparams.num_encoder_layers
@@ -35,16 +34,12 @@ class Seq2SeqModel(object):
         self._output_layer = tf.layers.Dense(
             hparams.tgt_vocab_size, use_bias=False, name="output_projection")
 
-    self.logits, self.loss, self.states, self.sample_id = self._build_graph(
+    self.logits, self.sample_id, self.states = self._build_graph(
         hparams, dataset, scope)
 
   @property
   def mode(self):
     return self._mode
-
-  @property
-  def dtype(self):
-    return self._dtype
 
   @property
   def time_major(self):
@@ -80,31 +75,26 @@ class Seq2SeqModel(object):
         scope=scope)
 
   def _build_graph(self, hparams, dataset, scope=None):
-    with tf.variable_scope(scope or "dynamic_seq2seq", dtype=self.dtype):
+    with tf.variable_scope(scope or "dynamic_seq2seq"):
       # "uni": outputs_encoder = [N, T, D] or [T, N, D]
       # "bi": outputs_encoder = [N, T, 2D] or [T, N, 2D]
       # states_encoder = [state_tuple(c=[N, D], h=[N, D])]*NUM_LAYERS
       outputs_encoder, states_encoder = self._build_encoder(hparams, dataset)
 
       # TRAIN or EVAL mode
-      # logits = [N, T, V] or [T, N, V] 
-      # sample_id = [N, T] or [T, N]
+      #   logits = [N, T, V] or [T, N, V]
+      #   sample_id = [N, T] or [T, N]
       # EVAL mode
-      # if hparams.beam_width > 0
-      # logits = tf.no_op() 
-      # sample_id = [N, T, B] or [T, N, B] 
-      # else
-      # logits = [N, T, V] or [T, N, V] 
-      # sample_id = [N, T] or [T, N]
+      #   if hparams.beam_width > 0   ---Beam search
+      #     logits = tf.no_op()
+      #     sample_id = [N, T, B] or [T, N, B]
+      #   else                        ---Greedy or Sampling
+      #     logits = [N, T, V] or [T, N, V] 
+      #     sample_id = [N, T] or [T, N]
       logits, sample_id, states = self._build_decoder(
           hparams, dataset, outputs_encoder, states_encoder)
 
-      if self.mode != tf.contrib.learn.ModeKeys.INFER:
-        loss = self._compute_loss(dataset, logits)
-      else:
-        loss = tf.no_op()
-
-    return logits, loss, states, sample_id
+    return logits, sample_id, states
 
   def _build_encoder(self, hparams, dataset):
     num_layers = self.num_encoder_layers
@@ -129,7 +119,7 @@ class Seq2SeqModel(object):
         outputs, states = tf.nn.dynamic_rnn(
             cell,
             inputs,
-            dtype=self.dtype,
+            dtype=tf.float32,
             # dataset.src_seq_lens = [N]
             sequence_length=dataset.src_seq_lens,
             time_major=self.time_major,
@@ -145,7 +135,6 @@ class Seq2SeqModel(object):
             inputs,
             # dataset.src_seq_lens = [N]
             dataset.src_seq_lens,
-            self.dtype,
             num_bi_layers,
             num_bi_res_layers)
         # outputs = [N, T, 2D] or [T, N, 2D]
@@ -191,7 +180,8 @@ class Seq2SeqModel(object):
           # dataset.src_seq_lens = [N]
           dataset.src_seq_lens)
 
-      # NOTE: `decoder_init_state` is batch-tiled in INFER mode with beam search
+      # NOTE: `decoder_init_state` is batch-tiled when beam search
+      # is enabled in INFER mode, which has shape
       # [state_tuple(c=[N(*B), D], h=[N(*B), D])]*NUM_LAYERS
       decoder_init_state = self._get_decoder_init_states(
           hparams,
@@ -226,15 +216,15 @@ class Seq2SeqModel(object):
         # outputs.sample_id = [N, T] or [T, N] --- argmax(rnn_output, axis=2)
         #
         # if hparams.attention == ""
-        # states = [state_tuple(c=[N, D], h=[N, D])]*NUM_LAYERS
-        # if hparams.attention != ""
-        # states: tf.contrib.seq2seq.AttentionWrapperState
+        #   states = [state_tuple(c=[N, D], h=[N, D])]*NUM_LAYERS
+        # else (i.e. hparams.attention != "")
+        #   states: tf.contrib.seq2seq.AttentionWrapperState
         #
-        # states.cell_state = [state_tuple(c=[N, D], h=[N, D])]*NUM_LAYERS
-        # states.attention = [N, D]
-        # states.time = []
-        # states.alignments = [N, Tsrc]
-        # states.alignment_history = [Ttgt, N, Tsrc]
+        #   states.cell_state = [state_tuple(c=[N, D], h=[N, D])]*NUM_LAYERS
+        #   states.attention = [N, D]
+        #   states.time = []
+        #   states.alignments = [N, Tsrc]
+        #   states.alignment_history = [Ttgt, N, Tsrc]
         outputs, states, decode_seq_lens = tf.contrib.seq2seq.dynamic_decode(
             decoder,
             output_time_major=self.time_major,
@@ -257,9 +247,7 @@ class Seq2SeqModel(object):
         if beam_width > 0:
           # BEAM SEARCH MODE
           # NOTE: In INFER mode with beam search, 
-          # `memory`, 
-          # `src_seq_lens`
-          # `states_encoder` must be batch-tiled
+          # `memory`, `src_seq_lens`, `states_encoder` must be batch-tiled
           # Link: https://www.tensorflow.org/api_docs/python/tf/contrib/seq2seq/BeamSearchDecoder
           decoder = tf.contrib.seq2seq.BeamSearchDecoder(
               cell=cell,
@@ -293,13 +281,25 @@ class Seq2SeqModel(object):
             hparams.tgt_max_len_infer else 2 * dataset.get_max_time_src()
 
         # if beam_width > 0
-        # outputs: seq2seq.FinalBeamSearchDecoderOutput
-        # outputs.predicted_ids = [N, T, B] or [T, N, B]
-        # outputs.beam_search_decoder_output
+        #   outputs: seq2seq.FinalBeamSearchDecoderOutput
+        #   outputs.predicted_ids = [N, T, B] or [T, N, B]
+        #   outputs.beam_search_decoder_output
         # else
-        # outputs: seq2seq.BasicDecoderOutput
-        # outputs.rnn_output = [N, T, V] or [T, N, V] (output_layer applied)
-        # outputs.sample_id = [N, T] or [T, N] --- argmax(rnn_output, axis=2)
+        #   outputs: seq2seq.BasicDecoderOutput
+        #   outputs.rnn_output = [N, T, V] or [T, N, V] (output_layer applied)
+        #   outputs.sample_id = [N, T] or [T, N] --- argmax(rnn_output, axis=2)
+        #
+        # if beam_width > 0
+        #   states: seq2seq.BeamSearchDecoderState
+        #   states.cell_state: seq2seq.AttentionWrapperState
+        #   states.cell_state.cell_state: 
+        #       [state_tuple(c=[N, D], h=[N, D])]*NUM_LAYERS
+        # else
+        #   if hparams.attention != ""
+        #     states: seq2seq.AttentionWrapperState
+        #     states.cell_state: [state_tuple(c=[N, D], h=[N, D])]*NUM_LAYERS
+        #   else
+        #     states: [state_tuple(c=[N, D], h=[N, D])]*NUM_LAYERS
         outputs, states, decode_seq_lens = tf.contrib.seq2seq.dynamic_decode(
             decoder,
             maximum_iterations=maximum_iterations,
@@ -354,7 +354,6 @@ class Seq2SeqModel(object):
                                hparams,
                                inputs,
                                sequence_length,
-                               dtype,
                                num_bi_layers,
                                num_bi_res_layers):
     cell_fw = self._build_encoder_cell(hparams,
@@ -369,32 +368,8 @@ class Seq2SeqModel(object):
         cell_bw,
         inputs,
         sequence_length=sequence_length,
-        dtype=dtype,
+        dtype=tf.float32,
         time_major=self.time_major,
         swap_memory=True)
 
     return bi_outputs, bi_states
-
-  def _compute_loss(self, dataset, logits):
-    # tgt_output_ids = [N, T]
-    tgt_output_ids = dataset.tgt_output_ids
-    # tgt_output_ids = [T, N]
-    if self.time_major:
-      tgt_output_ids = tf.transpose(tgt_output_ids)
-    # xentropy = [N, T] or [T, N]     
-    xentropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
-        labels=tgt_output_ids, logits=logits)
-
-    max_time = dataset.get_max_time_tgt()
-    # xentropy_weights = [N, T]
-    xentropy_weights = tf.sequence_mask(
-        dataset.tgt_seq_lens, max_time, dtype=self.dtype)
-    # xentropy_weights = [T, N]
-    if self.time_major:
-      xentropy_weights = tf.transpose(xentropy_weights)
-
-    # per sentence pair loss
-    loss = tf.reduce_sum(
-        xentropy * xentropy_weights) / tf.to_float(self.batch_size)
-    
-    return loss
