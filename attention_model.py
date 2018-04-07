@@ -18,9 +18,6 @@ class AttentionModel(model.Seq2SeqModel):
     attention_option = hparams.attention
     attention_architecture = hparams.attention_architecture
 
-    num_units = hparams.num_units
-    beam_width = hparams.beam_width
-
     memory = outputs_encoder
     # `memory` must be in BATCH major for attentional architecture
     # if "uni", memory = [N, T, D]
@@ -29,15 +26,16 @@ class AttentionModel(model.Seq2SeqModel):
       memory = tf.transpose(memory, [1, 0, 2])
     
     if self._use_tile_batch(hparams):
-      memory = tf.contrib.seq2seq.tile_batch(memory, beam_width)
-      src_seq_lens = tf.contrib.seq2seq.tile_batch(src_seq_lens, beam_width)
+      memory = tf.contrib.seq2seq.tile_batch(memory, hparams.beam_width)
+      src_seq_lens = tf.contrib.seq2seq.tile_batch(
+          src_seq_lens, hparams.beam_width)
      
-    attention_mechanism = _create_attention_mechanism(
-        attention_option, num_units, memory, src_seq_lens)
+    attention_mechanism = create_attention_mechanism(
+        attention_option, hparams.num_units, memory, src_seq_lens)
 
     cell = model_helper.create_rnn_cell(
         hparams.unit_type,
-        num_units,
+        hparams.num_units,
         num_layers,
         num_res_layers,
         hparams.forget_bias,
@@ -47,37 +45,39 @@ class AttentionModel(model.Seq2SeqModel):
     # Currently `alignment_history` can't be enabled in beam search mode
     # as of TensorFlow 1.5.0
     # Link: https://github.com/tensorflow/tensorflow/issues/13154
-    alignment_history = (self.mode == tf.contrib.learn.ModeKeys.INFER and
-                         beam_width == 0)
+    keep_history = keep_alignment_history(self.mode, hparams)
 
     return tf.contrib.seq2seq.AttentionWrapper(
         cell,
         attention_mechanism,
-        attention_layer_size=num_units,
-        alignment_history=alignment_history,
+        attention_layer_size=hparams.num_units,
+        alignment_history=keep_history,
         output_attention=hparams.output_attention,
         name="attention")
   
   def _get_decoder_init_states(self, hparams, states_encoder, cell):
-    beam_width = hparams.beam_width
     if self._use_tile_batch(hparams):
       states_encoder = tf.contrib.seq2seq.tile_batch(
-          states_encoder, beam_width)
-      batch_size = self.batch_size * beam_width
+          states_encoder, hparams.beam_width)
+      batch_size = self.batch_size * hparams.beam_width
     else:
       batch_size = self.batch_size
 
     if hparams.pass_hidden_state:
       return cell.zero_state(batch_size,
-          self.dtype).clone(cell_state=states_encoder)
+          tf.float32).clone(cell_state=states_encoder)
     else:
-      return cell.zero_state(batch_size, self.dtype)
+      return cell.zero_state(batch_size, tf.float32)
 
 
-def _create_attention_mechanism(attention_option,
-                                num_units,
-                                memory,
-                                src_seq_lens):
+def keep_alignment_history(mode, hparams):
+  return mode == tf.contrib.learn.ModeKeys.INFER and hparams.beam_width == 0
+
+
+def create_attention_mechanism(attention_option,
+                               num_units,
+                               memory,
+                               src_seq_lens):
 
   if attention_option == "luong":
     attention_mechanism = tf.contrib.seq2seq.LuongAttention(
@@ -101,14 +101,3 @@ def _create_attention_mechanism(attention_option,
     raise ValueError("Unknown attention option %s" % attention_option) 
 
   return attention_mechanism
-
-def _create_attention_image_summary(decoder_final_states):
-  # `decoder_final_state`: seq2seq.AttentionWrapperState
-  attention_images = decoder_final_states.alignment_history.stack()
-
-  attention_images = tf.expand_dims(
-      tf.transpose(attention_image, [1, 2, 0]), -1)
-
-  attention_image *= 255
-  attention_summary = tf.summary.image("attention_images", attention_images)
-  return attention_summary
