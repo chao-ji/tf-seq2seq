@@ -1,295 +1,224 @@
-from __future__ import print_function
-from __future__ import division
-
 import tensorflow as tf
 
-import data
-import model_helper
-import attention_model
+import model_runners_utils as utils
 
 
-class _BaseModelRunner(object):
-  mode = None
-  def __init__(self, builder, hparams, print_params=False):
+class Seq2SeqModelTrainer(object):
+  """Performs training using a seq2seq prediction model."""
+  def __init__(self, prediction_model, max_grad_norm):
+    """Constructor.
 
-    tf.contrib.learn.ModeKeys.validate(type(self).mode)
-    self._graph = tf.Graph()
-    with self._graph.as_default():
-      if type(self).mode == tf.contrib.learn.ModeKeys.INFER:
-        self._src_placeholder = tf.placeholder(
-            shape=[None], dtype=tf.string, name="src_placeholder")
-        self._batch_size_placeholder = tf.placeholder(
-            shape=[], dtype=tf.int64, name="batch_size_placeholder")
-        self._dataset = data.Seq2SeqDataset(
-            hparams,
-            type(self).mode,
-            self._src_placeholder,
-            self._batch_size_placeholder)
-      else:
-        self._dataset = data.Seq2SeqDataset(hparams, type(self).mode)
-      self._tables_initializer = tf.tables_initializer()
-      self._tables_initialized = False
+    Args:
+      prediction_model: a `Seq2SeqPredictionModel` instance.
+      max_grad_norm: float scalar, the maximum gradient norm that all gradients
+        are clipped to, in order to prevent exploding gradients.
+    """
+    self._prediction_model = prediction_model
+    self._max_grad_norm = max_grad_norm
 
-      self._model = builder(hparams, self.dataset, type(self).mode)
-      if type(self).mode == tf.contrib.learn.ModeKeys.TRAIN:
-        self._global_step = tf.Variable(0, trainable=False, name="global_step")
-      self._global_variables_initializer = tf.global_variables_initializer()
-      
-      self._params = tf.global_variables()
-      self._saver = tf.train.Saver(
-          self._params, max_to_keep=hparams.num_keep_ckpts)
+  def train(self,
+            src_file_list,
+            tgt_file_list,
+            src_vocab_file,
+            tgt_vocab_file,
+            dataset,
+            optimizer):
+    """Adds training related ops to the graph.
 
-      if print_params:
-        model_helper.print_params(self)
+    Args:
+      src_file_list: a list of string scalars, the paths to the source sequence
+        text files. 
+      tgt_file_list: a list of string scalars, the paths to the corresponding
+        target sequence text files.
+      src_vocab_file: string scalar, the path to the source vocabulary file,
+        where each line contains a single symbol. 
+      tgt_vocab_file: string scalar, the path to the target vocabulary file, 
+        where each line contains a single symbol. 
+      dataset: a `Seq2SeqDataset` instance.
+      optimizer: an optimizer instance.
 
-  @property
-  def graph(self):
-    return self._graph
+    Returns:
+      to_be_run_dict: a dict mapping from tensor/operation names to 
+        tensor/operation, the set of tensor/operations that need to be run
+        in a `tf.Session`.
+    """
+    tensor_dict = dataset.get_tensor_dict(
+        src_file_list, tgt_file_list, src_vocab_file, tgt_vocab_file)
+  
+    logits, batch_size = self._prediction_model.predict_logits(
+        tensor_dict['src_input_ids'],
+        tensor_dict['src_seq_lens'],
+        tensor_dict['tgt_input_ids'],
+        tensor_dict['tgt_seq_lens'])
 
-  @property
-  def dataset(self):
-    return self._dataset
+    loss = utils.create_loss(tensor_dict,
+                             logits,
+                             self._prediction_model.time_major)
 
-  @property
-  def model(self):
-    return self._model
+    global_step = tf.train.get_or_create_global_step()
+    grads_and_vars = optimizer.compute_gradients(
+        loss, colocate_gradients_with_ops=True)
+    grads_and_vars = list(zip(*grads_and_vars))
+    grads, vars_ = grads_and_vars[0], grads_and_vars[1]
+    clipped_grads, grad_norm_summary, grad_norm = utils.apply_gradient_clip(
+        grads, self._max_grad_norm)
+    grad_update_op = optimizer.apply_gradients(zip(clipped_grads, vars_),
+                                               global_step=global_step)
+    predict_count = utils.get_predict_count(tensor_dict['tgt_seq_lens'])
 
-  def restore_params_from(self, sess, ckpt_dir):
-    if not self._tables_initialized:
-      sess.run(self._tables_initializer)
-      self._tables_initialized = True
-
-    latest_ckpt = tf.train.latest_checkpoint(ckpt_dir)
-    if latest_ckpt:
-      print("%s model is loading params from %s..." % (
-          type(self).mode.upper(), latest_ckpt))
-      self._saver.restore(sess, latest_ckpt)
-    else:
-      print("%s model is creating fresh params..." % 
-          type(self).mode.upper())
-      sess.run(self._global_variables_initializer)
-
-  def persist_params_to(self, sess, ckpt):
-    print("%s model is saving params to %s..." % (
-        type(self).mode.upper(), ckpt))
-    self._saver.save(sess, ckpt, global_step=self.global_step)
-
-
-class Seq2SeqModelTrainer(_BaseModelRunner):
-  mode = tf.contrib.learn.ModeKeys.TRAIN
-  def __init__(self, builder, hparams):
-    super(Seq2SeqModelTrainer, self).__init__(
-        builder=builder,
-        hparams=hparams)
-    
-    with self.graph.as_default():
-      self.word_count = self.dataset.get_word_count()
-      self.predict_count = self.dataset.get_predict_count()
-      self.learning_rate = self._get_learning_rate(hparams)
-      self._loss = _compute_loss(self.dataset, self.model)
-      self.update_op, grad_norm_summary = self._create_update_op(hparams)
-
-      self.train_summary = tf.summary.merge([
-          tf.summary.scalar("lr", self.learning_rate),
-          tf.summary.scalar("train_loss", self.loss)
+    summary = tf.summary.merge([
+          tf.summary.scalar("train_loss", loss)
       ] + grad_norm_summary)
-      
-  @property
-  def global_step(self):
-    return self._global_step
 
-  @property
-  def loss(self):
-    return self._loss
+    to_be_run_dict = {'grad_update_op': grad_update_op,
+                      'loss': loss,
+                      'predict_count': predict_count,
+                      'batch_size': batch_size,
+                      'grad_norm': grad_norm,
+                      'summary': summary,
+                      'global_step': global_step}
 
-  def _get_learning_rate(self, hparams):
-    learning_rate = tf.constant(hparams.learning_rate)
-    learning_rate = self._get_learning_rate_warmup(hparams, learning_rate)
-    learning_rate = self._get_learning_rate_decay(hparams, learning_rate)
-    return learning_rate
-
-  def _get_learning_rate_warmup(self, hparams, learning_rate):
-    warmup_steps = hparams.warmup_steps
-    warmup_scheme = hparams.warmup_scheme
-
-    if warmup_scheme == "t2t":
-      warmup_factor = tf.exp(tf.log(0.01) / warmup_steps)
-      inv_decay = warmup_factor**(
-          tf.to_float(warmup_steps - self.global_step))
-    else:
-      raise ValueError("Unknown warmup scheme %s" % warmup_scheme) 
-
-    return tf.cond(
-        self.global_step < hparams.warmup_steps,
-        lambda: inv_decay * learning_rate,
-        lambda: learning_rate,
-        name="learning_rate_warmup_cond")
-
-  def _get_learning_rate_decay(self, hparams, learning_rate):
-    if hparams.decay_scheme in ["luong5", "luong10", "luong234"]:
-      decay_factor = 0.5
-      if hparams.decay_scheme == "luong5":
-        start_decay_step = int(hparams.num_train_steps / 2)
-        decay_times = 5
-      elif hparams.decay_scheme == "luong10":
-        start_decay_step = int(hparams.num_train_steps / 2)
-        decay_times = 10
-      elif hparams.decay_scheme == "luong234":
-        start_decay_step = int(hparams.num_train_steps * 2 / 3)
-        decay_times = 4
-      remain_steps = hparams.num_train_steps - start_decay_step
-      decay_steps = int(remain_steps / decay_times)
-    elif not hparams.decay_scheme:
-      start_decay_step = hparams.num_train_steps
-      decay_steps = 0
-      decay_factor = 1.0
-    elif hparams.decay_scheme:
-      raise ValueError("Unknown decay scheme %s" % hparams.decay_scheme)
-
-    return tf.cond(
-        self.global_step < start_decay_step,
-        lambda: learning_rate,
-        lambda: tf.train.exponential_decay(
-            learning_rate,
-            (self.global_step - start_decay_step),
-            decay_steps, decay_factor, staircase=True),
-        name="learning_rate_decay_cond")
-
-  def _create_update_op(self, hparams):
-    if hparams.optimizer == "sgd":
-      opt = tf.train.GradientDescentOptimizer(self.learning_rate)
-    elif hparams.optimizer == "adam":
-      opt = tf.train.AdamOptimizer(self.learning_rate)
-    else:
-      raise ValueError("Unknown optimizer: %s" % hparams.optimizer) 
-
-    params = self._params
-    gradients = tf.gradients(
-        self.loss,
-        params,
-        colocate_gradients_with_ops=hparams.colocate_gradients_with_ops)
-
-    clipped_grads, grad_norm_summary, self.grad_norm = \
-        model_helper.gradient_clip(gradients, hparams.max_gradient_norm)
-
-    update_op = opt.apply_gradients(
-        zip(clipped_grads, params), global_step=self.global_step)
-
-    return update_op, grad_norm_summary
-
-  def train(self, sess):
-    return sess.run([self.update_op,
-                     self.loss,
-                     self.predict_count,
-                     self.train_summary,
-                     self.global_step,
-                     self.word_count,
-                     self.model.batch_size,
-                     self.grad_norm,
-                     self.learning_rate])
-
-  def eval(self, sess):
-    return sess.run([self.loss,
-                     self.predict_count,
-                     self.model.batch_size])
+    return to_be_run_dict 
 
 
-class Seq2SeqModelEvaluator(_BaseModelRunner):
-  mode = tf.contrib.learn.ModeKeys.EVAL
-  def __init__(self, builder, hparams):
+class Seq2SeqModelEvaluator(object):
+  """Performs internal evaluation using a seq2seq prediction model.
+  
+  Internal evaluation only reports the loss and the resulting perplexity.
+  """
+  def __init__(self, prediction_model):
+    """Constructor.
 
-    super(Seq2SeqModelEvaluator, self).__init__(
-        builder=builder,
-        hparams=hparams)
+    Args:
+      prediction_model: a `Seq2SeqPredictionModel` instance.
+    """
+    self._prediction_model = prediction_model
 
-    with self.graph.as_default():
-      self.predict_count = self.dataset.get_predict_count()
-      self._loss = _compute_loss(self.dataset, self.model)
+  def evaluate(self,           
+               src_file_list,
+               tgt_file_list,
+               src_vocab_file,
+               tgt_vocab_file,
+               dataset):
+    """Adds evaluation related ops to the graph.
 
-  @property
-  def loss(self):
-    return self._loss
+    Args:
+      src_file_list: a list of string scalars, the paths to the source sequence
+        text files. 
+      tgt_file_list: a list of string scalars, the paths to the corresponding
+        target sequence text files.
+      src_vocab_file: string scalar, the path to the source vocabulary file,
+        where each line contains a single symbol. 
+      tgt_vocab_file: string scalar, the path to the target vocabulary file, 
+        where each line contains a single symbol. 
+      dataset: a `Seq2SeqDataset` instance.
 
-  def eval(self, sess):
-    return sess.run([self.loss,
-                     self.predict_count,
-                     self.model.batch_size])
+    Returns:
+      to_be_run_dict: a dict mapping from tensor/operation names to 
+        tensor/operation, the set of tensor/operations that need to be run
+        by a `tf.Session`.       
+    """
+    tensor_dict = dataset.get_tensor_dict(
+        src_file_list, tgt_file_list, src_vocab_file, tgt_vocab_file)
 
+    logits, batch_size = self._prediction_model.predict_logits(
+        tensor_dict['src_input_ids'],
+        tensor_dict['src_seq_lens'],
+        tensor_dict['tgt_input_ids'],
+        tensor_dict['tgt_seq_lens'])
 
-class Seq2SeqModelInferencer(_BaseModelRunner):
-  mode = tf.contrib.learn.ModeKeys.INFER
-  def __init__(self, builder, hparams):
+    loss = utils.create_loss(tensor_dict, 
+                             logits, 
+                             self._prediction_model.time_major)
+    predict_count = utils.get_predict_count(tensor_dict['tgt_seq_lens'])
 
-    super(Seq2SeqModelInferencer, self).__init__(
-      builder=builder,
-      hparams=hparams)
-
-    with self.graph.as_default():
-      self.sample_words = self.dataset.reverse_tgt_vocab_table.lookup(
-          tf.to_int64(self.model.sample_id))
-
-      if hasattr(self.model.states, "alignment_history") and \
-          self.model.states.alignment_history:
-        attention_images = self.model.states.alignment_history.stack()
-        attention_images = tf.expand_dims(
-            tf.transpose(attention_images, [1, 2, 0]), -1)
-        attention_images *= 255
-        self.alignments_summary = tf.summary.image(
-            "attention_images", attention_images)
-      else:
-        self.alignments_summary = tf.no_op()
-
-  @property
-  def src_placeholder(self):
-    return self._src_placeholder
-
-  @property
-  def batch_size_placeholder(self):
-    return self._batch_size_placeholder
-
-  def infer(self, sess):
-    return sess.run([
-        self.model.logits,
-        self.alignments_summary,
-        self.model.sample_id,
-        self.sample_words])
-
-  def decode(self, sess):
-    # without beam search:
-    # sample_words = [N, T] or [T, N]
-    # with beam search:
-    # sample_words = [N, T, B] or [T, N, B]
-    _, alignments_summary, _, sample_words = self.infer(sess)
-
-    if self.model.time_major:
-      sample_words = sample_words.transpose()
-    elif sample_words.ndim == 3:
-      sample_words = sample_words.transpose([2, 0, 1])
-
-    # sample_words = [N, T] or [B, N, T]
-    return sample_words, alignments_summary
+    to_be_run_dict = {'loss': loss,
+                      'predict_count': predict_count,
+                      'batch_size': batch_size}
+    return to_be_run_dict
 
 
-def _compute_loss(dataset, model):
-  # tgt_output_ids = [N, T]
-  tgt_output_ids = dataset.tgt_output_ids
-  # tgt_output_ids = [T, N]
-  if model.time_major:
-    tgt_output_ids = tf.transpose(tgt_output_ids)
-  # xentropy = [N, T] or [T, N]     
-  xentropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
-      labels=tgt_output_ids, logits=model.logits)
+class Seq2SeqModelInferencer(object):
+  """Performs external evaluation and inference using a seq2seq prediction 
+  model.
 
-  max_time = dataset.get_max_time_tgt()
-  # xentropy_weights = [N, T]
-  xentropy_weights = tf.sequence_mask(
-      dataset.tgt_seq_lens, max_time, dtype=tf.float32)
-  # xentropy_weights = [T, N]
-  if model.time_major:
-    xentropy_weights = tf.transpose(xentropy_weights)
+  External evaluation reports BLEU score by comparing a set of predicted target 
+  sequences and the corresponding groundtruth target sequences.
+  """
+  def __init__(self, 
+               prediction_model,
+               beam_width,
+               length_penalty_weight,
+               sampling_temperature,
+               maximum_iterations,
+               random_seed):
+    """Constructor
 
-  # per sentence pair loss
-  loss = tf.reduce_sum(
-      xentropy * xentropy_weights) / tf.to_float(model.batch_size)
+    Args:
+      prediction_model: a `Seq2SeqPredictionModel` instance.
+      beam_width: int scalar, width for beam seach.
+      length_penalty_weight: float scalar, length penalty weight for beam 
+        search. Disabled with 0.0
+      sampling_temperature: float scalar > 0.0, value to divide the logits by
+        before computing the softmax. Larger values (above 1.0) result in more
+        random samples, while smaller values push the sampling distribution 
+        towards the argmax. 
+      maximum_iterations: int scalar or None, max num of iterations for dynamic
+        decoding.
+      random_seed: int scalar, random seed for sampling decoder.
+    """
+    self._prediction_model = prediction_model
+    self._beam_width = beam_width
+    self._length_penalty_weight = length_penalty_weight
+    self._sampling_temperature = sampling_temperature
+    self._maximum_iterations = maximum_iterations
+    self._random_seed = random_seed
 
-  return loss
+  def infer(self,
+            src_file_list,
+            src_vocab_file,
+            tgt_vocab_file,
+            dataset):
+    """Adds inference related ops to the graph.
+
+    Args:
+      src_file_list: a list of string scalars, the paths to the source sequence
+        text files. 
+      src_vocab_file: string scalar, the path to the source vocabulary file,
+        where each line contains a single symbol. 
+      tgt_vocab_file: string scalar, the path to the target vocabulary file, 
+        where each line contains a single symbol. 
+      dataset: a `Seq2SeqDataset` instance.
+
+    Returns:
+      to_be_run_dict: a dict mapping from tensor/operation names to 
+        tensor/operation, the set of tensor/operations that need to be run
+        by a `tf.Session`.   
+    """
+    tensor_dict = dataset.get_tensor_dict(src_file_list,
+                                          src_vocab_file,
+                                          tgt_vocab_file)
+
+    indices, states = self._prediction_model.predict_indices(
+        tensor_dict['src_input_ids'],
+        tensor_dict['src_seq_lens'],
+        tensor_dict['tgt_sos_id'],
+        tensor_dict['tgt_eos_id'],
+        self._beam_width,
+        self._length_penalty_weight,
+        self._sampling_temperature,
+        self._maximum_iterations,
+        self._random_seed)
+
+    if self._prediction_model.time_major:
+      indices = tf.transpose(indices)
+    elif indices.shape.ndims == 3:
+      indices = tf.transpose(indices, [2, 0, 1])
+
+    tgt_vocab_table = dataset.get_rev_tgt_vocab_table(tgt_vocab_file)
+
+    decoded_symbols = tgt_vocab_table.lookup(tf.to_int64(indices))
+
+    to_be_run_dict = {'decoded_symbols': decoded_symbols}
+    return to_be_run_dict
+
