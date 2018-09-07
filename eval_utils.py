@@ -2,9 +2,13 @@ import codecs
 
 import numpy as np
 import tensorflow as tf
+import matplotlib.pyplot as plt
 
 import bleu
 
+HEIGHT = 12
+WIDTH = 12
+DPI = 256
 
 def compute_perplexity(loss_list, batch_size_list, predict_count_list):
   """Computes per-word perplexity of prediction over a set of sequences.
@@ -16,7 +20,7 @@ def compute_perplexity(loss_list, batch_size_list, predict_count_list):
       target sequences of each batch. 
 
   Returns:
-    ppl: float scalar, perplexity
+    ppl: float scalar, perplexity.
   """
   if not isinstance(loss_list, np.ndarray):
     loss_list = np.array(loss_list)
@@ -25,11 +29,10 @@ def compute_perplexity(loss_list, batch_size_list, predict_count_list):
   if not isinstance(predict_count_list, np.ndarray):
     predict_count_list = np.array(predict_count_list)
   ppl = np.exp(np.sum(loss_list * batch_size_list) / np.sum(predict_count_list))
-
   return ppl
 
       
-def decoded_symbols_to_strings(decoded_symbols, tgt_eos=b'<\s>'):
+def decoded_symbols_to_strings(decoded_symbols, tgt_eos=b'</s>'):
   """For each decoded sequence in a batch, represented as a list of strings,
   discard the entries after the first end-of-sentence marker, and joins the 
   remaining strings with ' '.  
@@ -47,8 +50,10 @@ def decoded_symbols_to_strings(decoded_symbols, tgt_eos=b'<\s>'):
   tgt_seqs = []
   for symbols_list in decoded_symbols[0]:
     symbols_list = list(symbols_list)
-    if tgt_eos and tgt_eos in symbols_list:
+
+    if tgt_eos and (tgt_eos in symbols_list):
       symbols_list = symbols_list[:symbols_list.index(tgt_eos)]
+
     tgt_seqs.append(b' '.join(symbols_list))
   return tgt_seqs
 
@@ -65,6 +70,54 @@ def write_predicted_target_sequences(tgt_seqs, tgt_file):
     f.write('')
     for seq in tgt_seqs:
       f.write((seq + b'\n').decode('utf-8'))
+
+
+def visualize_alignment(result_dict, tgt_eos='</s>'):
+  """Visualize the alignment between source and decoded target sequence.
+
+  Args:
+    result_dict: dict mapping from name to numpy array with entries
+      --decode_symbols: float array with shape [K, batch, max_time_tgt], where 
+        K = 1 for greedy and sampling decoder, and K = beam_width for beam 
+        search decoder.
+      --alignment: float tensor with shape [max_time_tgt, K, max_time_src], 
+        where max_time_tgt = the maximum length of decoded sequences over a 
+        batch, K = batch_size (not in beam-search mode) or 
+        batch_size * beam_width (with batch_size being the first axis, in 
+        beam-search mode), holding the alignment scores of each target symbol 
+        w.r.t each input source symbol.
+      --input_symbols: string tensor with shape [batch, max_time_src], the
+        input sequences of symbols.
+
+  Returns:
+    image: uint8 4-D numpy containing the image to be visualized.
+  """
+  input_seq = list(map(lambda s: s.decode('utf-8'), 
+      result_dict['input_symbols'][0]))
+  output_seq = list(map(lambda s: s.decode('utf-8'), 
+      result_dict['decoded_symbols'][0, 0]))
+
+  true_decode_len = output_seq.index(tgt_eos)
+  output_seq = output_seq[:true_decode_len]
+  alignment = result_dict['alignment'][:, 0, :]
+  alignment = alignment[:true_decode_len, :]
+
+  plt.imshow(alignment, cmap='gray')
+  plt.xticks(range(len(input_seq)))
+  plt.yticks(range(len(output_seq)))
+
+  ax = plt.gca()
+  ax.xaxis.tick_top()
+  ax.set_xticklabels(input_seq, rotation=90)
+  ax.set_yticklabels(output_seq)
+
+  fig = plt.gcf()
+  fig.set_size_inches(HEIGHT, WIDTH)
+  fig.set_dpi(DPI)  
+  fig.canvas.draw()
+  data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep='')
+  data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+  return np.expand_dims(data, axis=0)
 
 
 def compute_bleu(ref_file, trans_file):

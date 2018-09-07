@@ -4,8 +4,8 @@ VOCAB_SIZE_THRESHOLD_CPU = 50000
 
 
 def _get_embed_device(vocab_size):
-  """Returns the device name to pin embedding matrix variables to, based on
-  vocabulary size.
+  """Returns the name of the device to place embedding matrix variables, 
+  based on vocabulary size.
   """
   if vocab_size > VOCAB_SIZE_THRESHOLD_CPU:
     return "/cpu:0"
@@ -82,8 +82,8 @@ def create_single_cell(unit_type='lstm',
     unit_type: string scalar, the type of RNN cell ('lstm', 'gru', etc.).
     num_units: int scalar, the num of units in an RNN Cell.
     forget_bias: float scalar, forget bias in LSTM Cell. Defaults to 1.0.
-    keep_prob: float scalar, dropout rate equals 1 - `keep_prob`.
-    residual_connection: bool scalar, whether to add residual connection to
+    keep_prob: float scalar, dropout rate equals `1 - keep_prob`.
+    residual_connection: bool scalar, whether to add residual connection linking
       the input and output of a RNN Cell.
 
   Returns:
@@ -98,12 +98,11 @@ def create_single_cell(unit_type='lstm',
   else:
     raise ValueError('Unknown RNN unit type: {}'.format(unit_type))
 
-  single_cell = tf.contrib.rnn.DropoutWrapper(
-      cell=single_cell, input_keep_prob=keep_prob)
-
+  if keep_prob < 1.0:
+    single_cell = tf.contrib.rnn.DropoutWrapper(
+        cell=single_cell, input_keep_prob=keep_prob)
   if residual_connection:
     single_cell = tf.contrib.rnn.ResidualWrapper(single_cell)
-
   return single_cell
 
 
@@ -119,7 +118,7 @@ def create_cell_list(unit_type,
     unit_type: string scalar, the type of RNN cell ('lstm', 'gru', etc.).
     num_units: int scalar, the num of units in an RNN Cell.
     forget_bias: float scalar, forget bias in LSTM Cell. Defaults to 1.0.
-    keep_prob: float scalar, dropout rate equals 1 - `keep_prob`.
+    keep_prob: float scalar, dropout rate equals `1 - keep_prob`.
     num_layers: int scalar, the num of layers in a multi-layer RNN.
     num_res_layers: int scalar, the num of layers in a multi-layer RNN with 
       residual connections.
@@ -143,19 +142,19 @@ def create_rnn_cell(unit_type,
                     keep_prob,
                     num_layers,
                     num_res_layers):
-  """Creates an RNN Cell in a single layer or multi-layer RNN.
+  """Creates an RNN Cell for a single layer or multi-layer RNN.
 
   Args:
     unit_type: string scalar, the type of RNN cell ('lstm', 'gru', etc.).
     num_units: int scalar, the num of units in an RNN Cell.
     forget_bias: float scalar, forget bias in LSTM Cell. Defaults to 1.0.
-    keep_prob: float scalar, dropout rate equals 1 - `keep_prob`.
+    keep_prob: float scalar, dropout rate equals `1 - keep_prob`.
     num_layers: int scalar, the num of layers in a multi-layer RNN.
     num_res_layers: int scalar, the num of layers in a multi-layer RNN with 
       residual connections.
 
   Returns:
-    an RNN cell instance.
+    an RNN Cell instance.
   """
   cell_list = create_cell_list(unit_type,
                                num_units,

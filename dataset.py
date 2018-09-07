@@ -37,6 +37,8 @@ class Seq2SeqDataset(object):
     self._sos = sos
     self._eos = eos
 
+    self._src_vocab_table = None
+    self._tgt_vocab_table = None
     self._get_tensor_dict_scope = 'GetTensorDict'
     self._assert_equal_ops = list()
 
@@ -63,7 +65,7 @@ class Seq2SeqDataset(object):
   def _get_vocab_tables(self, src_vocab_file, tgt_vocab_file):
     """Builds the vocabulary tables for looking up source and target sequence. 
     Vocabulary table is a dict mapping from symbols (string tensor) to symbol 
-    indices (int tensor), where symbols are defined as elements that vocabulary
+    indices (int tensor), where symbols are defined as elements that vocabulary 
     is made up of. Has the side effect of setting `self._assert_equal_ops`.
 
     Args:
@@ -80,13 +82,11 @@ class Seq2SeqDataset(object):
         src_vocab_file, default_value=UNK_ID)
     tgt_vocab_table = tf.contrib.lookup.index_table_from_file(
         tgt_vocab_file, default_value=UNK_ID)
-
     self._assert_equal_ops = [
         tf.assert_equal(src_vocab_table.size(),
             tf.constant(self._src_vocab_size, dtype=tf.int64)),
         tf.assert_equal(tgt_vocab_table.size(),
             tf.constant(self._tgt_vocab_size, dtype=tf.int64))]
-
     return src_vocab_table, tgt_vocab_table
 
   def _get_tgt_marker_indices(self, tgt_vocab_table):
@@ -140,8 +140,8 @@ class Seq2SeqDataset(object):
     if self.mode == tf.contrib.learn.ModeKeys.INFER:
       raise ValueError('Must be in train or eval mode when calling',
           '`_get_tensor_dict_train_eval`.')
-    src_vocab_table, tgt_vocab_table = self._get_vocab_tables(src_vocab_file,
-                                                              tgt_vocab_file)
+    src_vocab_table, tgt_vocab_table = self._get_vocab_tables(
+        src_vocab_file, tgt_vocab_file)
     tgt_sos_id, tgt_eos_id = self._get_tgt_marker_indices(tgt_vocab_table)
     src_dataset = tf.data.TextLineDataset(src_file_list)
     tgt_dataset = tf.data.TextLineDataset(tgt_file_list)
@@ -182,8 +182,7 @@ class Seq2SeqDataset(object):
 
     if self._num_buckets > 1:
       # mapper
-      def key_fn(*args):
-        src_len, tgt_len = args[-2], args[-1]
+      def key_fn(_1, _2, _3, src_len, tgt_len):
         bucket_width = 10
         if self._src_max_len:
           bucket_width = (self._src_max_len + self._num_buckets - 1
@@ -241,11 +240,11 @@ class Seq2SeqDataset(object):
     if self.mode != tf.contrib.learn.ModeKeys.INFER:
       raise ValueError('Must be in infer mode when calling',
           '`_get_tensor_dict_infer`.')
-    src_dataset = tf.data.TextLineDataset(src_file_list) 
-    src_vocab_table, tgt_vocab_table = self._get_vocab_tables(src_vocab_file,
-                                                              tgt_vocab_file)
+    src_vocab_table, tgt_vocab_table = self._get_vocab_tables(
+        src_vocab_file, tgt_vocab_file)
     tgt_sos_id, tgt_eos_id = self._get_tgt_marker_indices(tgt_vocab_table)
 
+    src_dataset = tf.data.TextLineDataset(src_file_list) 
     src_dataset = src_dataset.map(lambda src: tf.string_split([src]).values)
     if self._src_max_len:
       src_dataset = src_dataset.map(lambda src: src[:self._src_max_len])
@@ -253,12 +252,8 @@ class Seq2SeqDataset(object):
         lambda src: tf.to_int32(src_vocab_table.lookup(src)))
     src_dataset = src_dataset.map(lambda src: (src, tf.size(src)))
 
-    def batching_fn(dataset):
-      return dataset.padded_batch(
-          self._batch_size,
-          padded_shapes=dataset.output_shapes)
-
-    batched_dataset = batching_fn(src_dataset)
+    batched_dataset = src_dataset.padded_batch(self._batch_size, 
+        padded_shapes=src_dataset.output_shapes)
     iterator = batched_dataset.make_initializable_iterator()
     src_input_ids, src_seq_lens = iterator.get_next()
 
@@ -289,9 +284,9 @@ class TrainerSeq2SeqDataset(Seq2SeqDataset):
       batch_size: int scalar, batch size.
       src_vocab_size: int scalar, num of symbols in source vocabulary.
       tgt_vocab_size: int scalar, num of symbols in target vocabulary.
-      shuffle_buffer_size: int scalar, buffer size for shuffling the dataset.
-        Must be large enough to ensure sufficiently randomized dataset. If None,
-        no shuffling is performed.
+      shuffle_buffer_size: int scalar or None, buffer size for shuffling the 
+        dataset. Must be large enough to ensure sufficiently randomized dataset.
+        If None, no shuffling is performed.
       num_buckets: int scalar, the num of buckets containing sequences within 
         different length ranges. If 1, no bucketing is performed.
       src_max_len: int scalar or None, used to truncate source sequence to a 
@@ -455,7 +450,7 @@ class InferencerSeq2SeqDataset(Seq2SeqDataset):
             a batch.
          'tgt_sos_id': an int scalar tensor, the index of sos in target
             vocabulary.
-         'tgt_eos_id': an int scalar tensor, the index of sos in target
+         'tgt_eos_id': an int scalar tensor, the index of eos in target
             vocabulary.}
     """
     with tf.name_scope(scope, self._get_tensor_dict_scope,
@@ -463,20 +458,20 @@ class InferencerSeq2SeqDataset(Seq2SeqDataset):
       return self._get_tensor_dict_infer(
           src_file_list, src_vocab_file, tgt_vocab_file)
 
-  def get_rev_tgt_vocab_table(self, tgt_vocab_file, scope=None):
+  def get_rev_vocab_table(self, vocab_file, scope=None):
     """Builds the reverse vocabulary table for target sequence.
     Reverse vocabulary table is a table mapping from symbol indices to symbols.
 
     Args:
-      tgt_vocab_file: string scalar or None, the path to the target vocabulary 
+      vocab_file: string scalar, the path to the source or target vocabulary 
         file, where each line contains a single symbol. 
       scope: string scalar or None, name scope.
 
     Returns:
-      rev_tgt_vocab_table: a HashTable instance, the reverse target vocabulary.
+      rev_vocab_table: a HashTable instance, the reverse target vocabulary.
     """
-    with tf.name_scope(scope, 'ReverseTgtVocabTable', values=[tgt_vocab_file]):
-      rev_tgt_vocab_table = tf.contrib.lookup.index_to_string_table_from_file(
-          tgt_vocab_file, default_value=UNK)
-      return rev_tgt_vocab_table
+    with tf.name_scope(scope, 'ReverseTgtVocabTable', values=[vocab_file]):
+      rev_vocab_table = tf.contrib.lookup.index_to_string_table_from_file(
+          vocab_file, default_value=UNK)
+      return rev_vocab_table
  

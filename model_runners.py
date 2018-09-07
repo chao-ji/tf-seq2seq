@@ -1,3 +1,9 @@
+r"""Module defines three 'ModelRunners': Trainer, Evaluator, and Inferencer.
+Each wraps a prediction model that runs the input through the forward pass
+to get a prediction logit tensor or symbol indices tensor. Also provides API 
+`train`, `evaluate`, and `infer` for performing training, evaluation, and 
+inference using the prediction model.
+"""
 import tensorflow as tf
 
 import model_runners_utils as utils
@@ -65,10 +71,8 @@ class Seq2SeqModelTrainer(object):
     grad_update_op = optimizer.apply_gradients(zip(clipped_grads, vars_),
                                                global_step=global_step)
     predict_count = utils.get_predict_count(tensor_dict['tgt_seq_lens'])
-
-    summary = tf.summary.merge([
-          tf.summary.scalar("train_loss", loss)
-      ] + grad_norm_summary)
+    summary = tf.summary.merge([tf.summary.scalar("train_loss", loss)] + 
+        grad_norm_summary)
 
     to_be_run_dict = {'grad_update_op': grad_update_op,
                       'loss': loss,
@@ -77,7 +81,6 @@ class Seq2SeqModelTrainer(object):
                       'grad_norm': grad_norm,
                       'summary': summary,
                       'global_step': global_step}
-
     return to_be_run_dict 
 
 
@@ -147,11 +150,11 @@ class Seq2SeqModelInferencer(object):
   """
   def __init__(self, 
                prediction_model,
-               beam_width,
-               length_penalty_weight,
-               sampling_temperature,
-               maximum_iterations,
-               random_seed):
+               beam_width=10,
+               length_penalty_weight=0.0,
+               sampling_temperature=1.0,
+               maximum_iterations=None,
+               random_seed=0):
     """Constructor
 
     Args:
@@ -191,15 +194,25 @@ class Seq2SeqModelInferencer(object):
       dataset: a `Seq2SeqDataset` instance.
 
     Returns:
-      to_be_run_dict: a dict mapping from tensor/operation names to 
-        tensor/operation, the set of tensor/operations that need to be run
-        by a `tf.Session`.   
+      tensor_dict: dict mapping from tensor names to the following tensors
+        --decode_symbols: float array with shape [K, batch, max_time_tgt], where 
+          K = 1 for greedy and sampling decoder, and K = beam_width for beam 
+          search decoder.
+        --alignment: float tensor with shape [max_time_tgt, K, max_time_src], 
+          where max_time_tgt = the maximum length of decoded sequences over a 
+          batch, K = batch_size (not in beam-search mode) or 
+          batch_size * beam_width (with batch_size being the first axis, in 
+          beam-search mode), holding the alignment scores of each target symbol 
+          w.r.t each input source symbol.
+          OR tf.no_op if NOT using attention mechanism.
+        --input_symbols: string tensor with shape [batch, max_time_src], the
+          input sequences of symbols.
     """
     tensor_dict = dataset.get_tensor_dict(src_file_list,
                                           src_vocab_file,
                                           tgt_vocab_file)
 
-    indices, states = self._prediction_model.predict_indices(
+    indices, alignment = self._prediction_model.predict_indices(
         tensor_dict['src_input_ids'],
         tensor_dict['src_seq_lens'],
         tensor_dict['tgt_sos_id'],
@@ -215,10 +228,13 @@ class Seq2SeqModelInferencer(object):
     elif indices.shape.ndims == 3:
       indices = tf.transpose(indices, [2, 0, 1])
 
-    tgt_vocab_table = dataset.get_rev_tgt_vocab_table(tgt_vocab_file)
-
-    decoded_symbols = tgt_vocab_table.lookup(tf.to_int64(indices))
-
-    to_be_run_dict = {'decoded_symbols': decoded_symbols}
-    return to_be_run_dict
-
+    if indices.shape.ndims == 2:
+      indices = tf.expand_dims(indices, axis=0)
+    rev_tgt_vocab_table = dataset.get_rev_vocab_table(tgt_vocab_file)
+    decoded_symbols = rev_tgt_vocab_table.lookup(tf.to_int64(indices))
+    rev_src_vocab_table = dataset.get_rev_vocab_table(src_vocab_file)
+    input_symbols = rev_src_vocab_table.lookup(tf.to_int64(tensor_dict['src_input_ids']))
+    tensor_dict = {'decoded_symbols': decoded_symbols, 'alignment': alignment, 
+                   'input_symbols': input_symbols}
+    return tensor_dict
+    

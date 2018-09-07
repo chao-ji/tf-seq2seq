@@ -93,7 +93,7 @@ def build_dataset(config, mode):
         random_seed=random_seed)
   elif mode == tf.contrib.learn.ModeKeys.EVAL:
     return dataset.EvaluatorSeq2SeqDataset(
-        batch_size= config.batch_size,
+        batch_size=config.batch_size,
         src_vocab_size=src_vocab_size,
         tgt_vocab_size=tgt_vocab_size,
         num_buckets= config.num_buckets,
@@ -144,7 +144,7 @@ def create_loss(tensor_dict, logits, time_major):
 
   Args:
     tensor_dict: a dict mapping from tensor names to tensors. Must have the 
-      groundtruth entry `tgt_output_ids` and `tgt_seq_lens`.
+      groundtruth entries `tgt_output_ids` and `tgt_seq_lens`.
     logits: float tensor with shape [max_tgt_time, batch, tgt_vocab_size]/
       [batch, max_tgt_time, tgt_vocab_size], the prediction logits.
     time_major: bool scalar, whether `logits` is in time major format.

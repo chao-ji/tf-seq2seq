@@ -23,13 +23,14 @@ class VanillaSeq2SeqPredictionModel(Seq2SeqPredictionModel):
       tgt_input_ids: int tensor with shape [batch, max_time_tgt], the indices
         of target input sequence symbols in a batch.
       tgt_seq_lens: int tensor with shape [batch], the lengths of unpadded 
-        target sequences in a `tgt_input_ids`.
+        target sequences in `tgt_input_ids`.
       scope: string scalar, scope name.
 
     Returns:
       logits: float tensor with shape [max_tgt_time, batch, tgt_vocab_size]/
         [batch, max_tgt_time, tgt_vocab_size], the prediction logits.
-      batch_size: int scalar tensor, num of sequence in a batch.
+      batch_size: int scalar tensor, num of sequence in a batch. Used to compute
+        training perplexity.
     """
     if self._is_inferring:
       raise ValueError('Model must NOT be in inferring mode when calling',
@@ -41,16 +42,14 @@ class VanillaSeq2SeqPredictionModel(Seq2SeqPredictionModel):
       encoder_outputs, encoder_states = self._build_encoder(
           src_input_ids, src_seq_lens, encoder_embedding)
 
-      with tf.variable_scope('decoder'):
+      with tf.variable_scope('decoder') as scope:
         batch_size = tf.size(src_seq_lens)
+
         cell = self._build_decoder_cell(
             self._num_decoder_layers, self._num_decoder_res_layers)
-
         decoder_init_state = encoder_states
-
         logits = self._create_logits(tgt_input_ids, tgt_seq_lens, 
-            decoder_embedding, cell, decoder_init_state)
-
+            decoder_embedding, cell, decoder_init_state, scope)
         return logits, batch_size
 
   def predict_indices(self,
@@ -87,12 +86,12 @@ class VanillaSeq2SeqPredictionModel(Seq2SeqPredictionModel):
       scope: string scalar, scope name.
 
     Returns:
-      indices: int tensor with shape [batch, max_time]/[max_time, batch] for
-        greedy and sampling decoder, Or
-        [batch, max_time, beam_width]/[max_time, batch, beam_width] for 
+      indices: int tensor with shape [batch, max_time_tgt]/[max_time_tgt, batch] 
+        for greedy and sampling decoder, Or
+        [batch, max_time_tgt, beam_width]/[max_time_tgt, batch, beam_width] for 
         beam search decoder, the sampled ids of decoded sequence of symbols 
         in target vocabulary.
-      states:
+      alignment: tf.no_op, DUMMY operation.
     """
     if not self._is_inferring:
       raise ValueError('Model must be in inferring mode when calling',
@@ -104,20 +103,18 @@ class VanillaSeq2SeqPredictionModel(Seq2SeqPredictionModel):
       encoder_outputs, encoder_states = self._build_encoder(
           src_input_ids, src_seq_lens, encoder_embedding)
 
-      with tf.variable_scope('decoder'):
+      with tf.variable_scope('decoder') as scope:
         batch_size = tf.size(src_seq_lens)
+
         cell = self._build_decoder_cell(
             self._num_decoder_layers, self._num_decoder_res_layers)
-
         decoder_init_state = encoder_states
         if beam_width > 0:
           decoder_init_state = tf.contrib.seq2seq.tile_batch(
               encoder_states, beam_width)
-
         maximum_iterations = (maximum_iterations or 
             2 * tf.reduce_max(src_seq_lens))
-
-        indices, states = self._create_indices(
+        indices, alignment = self._create_indices(
             tgt_sos_id,
             tgt_eos_id,
             batch_size,
@@ -128,8 +125,9 @@ class VanillaSeq2SeqPredictionModel(Seq2SeqPredictionModel):
             length_penalty_weight,
             sampling_temperature,
             maximum_iterations,
-            random_seed)
-        return indices, states
+            random_seed,
+            scope)
+        return indices, alignment
 
 
 class AttentionSeq2SeqPredictionModel(Seq2SeqPredictionModel):
@@ -158,7 +156,7 @@ class AttentionSeq2SeqPredictionModel(Seq2SeqPredictionModel):
       unit_type: string scalar, the type of RNN cell ('lstm', 'gru', etc.).
       num_units: int scalar, the num of units in an RNN Cell.
       forget_bias: float scalar, forget bias in LSTM Cell. Defaults to 1.0.
-      keep_prob: float scalar, dropout rate equals 1 - `keep_prob`.
+      keep_prob: float scalar, dropout rate equals `1 - keep_prob`.
       encoder_type: string scalar, 'uni' (unidirectional RNN as encoder) or 
         'bi' (bidirectional RNN as encode).
       time_major: bool scalar, whether the output tensors are in time major 
@@ -173,10 +171,10 @@ class AttentionSeq2SeqPredictionModel(Seq2SeqPredictionModel):
       tgt_vocab_size: int scalar, num of symbols in target vocabulary.
       num_encoder_layers: int scalar, the num of layers in the encoding RNN.
       num_encoder_res_layers: int scalar, the num of layers in the encoding RNN
-         with residual connections.
+        with residual connections.
       num_decoder_layers: int scalar, the num of layers in the decoding RNN.
       num_decoder_res_layers: int scalar, the num of layers in the decoding RNN
-         with residual connections.
+        with residual connections.
       attention_type: string scalar, valid values are 'luong', 'scaled_luong',
         'bahdanau', and 'normed_bahdanau'.
       output_attention: bool scalar, If True, the output at each time step is 
@@ -204,7 +202,6 @@ class AttentionSeq2SeqPredictionModel(Seq2SeqPredictionModel):
         num_encoder_res_layers=num_encoder_res_layers,
         num_decoder_layers=num_decoder_layers,
         num_decoder_res_layers=num_decoder_res_layers)
-
     self._attention_type = attention_type
     self._output_attention = output_attention
 
@@ -224,13 +221,14 @@ class AttentionSeq2SeqPredictionModel(Seq2SeqPredictionModel):
       tgt_input_ids: int tensor with shape [batch, max_time_tgt], the indices
         of target input sequence symbols in a batch.
       tgt_seq_lens: int tensor with shape [batch], the lengths of unpadded 
-        target sequences in a `tgt_input_ids`.
+        target sequences in `tgt_input_ids`.
       scope: string scalar, scope name.
 
     Returns:
       logits: float tensor with shape [max_tgt_time, batch, tgt_vocab_size]/
         [batch, max_tgt_time, tgt_vocab_size], the prediction logits.
-      batch_size: int scalar tensor, num of sequence in a batch.
+      batch_size: int scalar tensor, num of sequence in a batch. Used to compute
+        training perplexity.
     """
     if self._is_inferring:
       raise ValueError('Model must NOT be in inferring mode when calling',
@@ -244,17 +242,15 @@ class AttentionSeq2SeqPredictionModel(Seq2SeqPredictionModel):
 
       with tf.variable_scope('decoder') as scope:
         batch_size = tf.size(src_seq_lens)
+
         cell = self._build_decoder_cell(
             self._num_decoder_layers, self._num_decoder_res_layers)
         cell = self._wrap_decoder_cell(
             cell, encoder_outputs, src_seq_lens)
-
         decoder_init_state = self._get_decoder_init_states(
             encoder_states, cell, batch_size)
-
         logits = self._create_logits(tgt_input_ids, tgt_seq_lens, 
             decoder_embedding, cell, decoder_init_state, scope)
-
         return logits, batch_size
 
   def predict_indices(self,
@@ -264,7 +260,7 @@ class AttentionSeq2SeqPredictionModel(Seq2SeqPredictionModel):
                       tgt_eos_id,
                       beam_width=10,
                       length_penalty_weight=0.0,
-                      sampling_temperature=0.0,
+                      sampling_temperature=1.0,
                       maximum_iterations=None,
                       random_seed=0,
                       scope=None):
@@ -291,12 +287,16 @@ class AttentionSeq2SeqPredictionModel(Seq2SeqPredictionModel):
       scope: string scalar, scope name.
 
     Returns:
-      indices: int tensor with shape [batch, max_time]/[max_time, batch] for
-        greedy and sampling decoder, Or
-        [batch, max_time, beam_width]/[max_time, batch, beam_width] for 
+      indices: int tensor with shape [batch, max_time_tgt]/[max_time_tgt, batch] 
+        for greedy and sampling decoder, Or
+        [batch, max_time_tgt, beam_width]/[max_time_tgt, batch, beam_width] for 
         beam search decoder, the sampled ids of decoded sequence of symbols 
         in target vocabulary.
-      states:
+      alignment: float tensor with shape [max_time_tgt, K, max_time_src], where
+        max_time_tgt = the maximum length of decoded sequences over a batch,
+        K = batch_size (not in beam-search mode) or batch_size * beam_width (
+        with batch_size being the first axis, in beam-search mode), holding the 
+        alignment scores of each target symbol w.r.t each input source symbol.
     """
     if not self._is_inferring:
       raise ValueError('Model must be in inferring mode when calling',
@@ -310,18 +310,16 @@ class AttentionSeq2SeqPredictionModel(Seq2SeqPredictionModel):
 
       with tf.variable_scope('decoder') as scope:
         batch_size = tf.size(src_seq_lens)
+
         cell = self._build_decoder_cell(
             self._num_decoder_layers, self._num_decoder_res_layers)
         cell = self._wrap_decoder_cell(
             cell, encoder_outputs, src_seq_lens, beam_width)
-
         decoder_init_state = self._get_decoder_init_states(
             encoder_states, cell, batch_size, beam_width)
-
         maximum_iterations = (maximum_iterations or
             2 * tf.reduce_max(src_seq_lens))
-
-        indices, states = self._create_indices(
+        indices, alignment = self._create_indices(
             tgt_sos_id,
             tgt_eos_id,
             batch_size,
@@ -334,8 +332,7 @@ class AttentionSeq2SeqPredictionModel(Seq2SeqPredictionModel):
             maximum_iterations,
             random_seed,
             scope)
-
-        return indices, states
+        return indices, alignment
 
   def _wrap_decoder_cell(self,
                          cell,
@@ -350,9 +347,9 @@ class AttentionSeq2SeqPredictionModel(Seq2SeqPredictionModel):
     Args:
       cell: an RNN Cell, decoder cell returned by `self._build_decoder_cell`.
       encoder_outputs: float tensor with shape
-        [batch, max_time, num_units]/[max_time, batch, num_units] (time_major
-        is False/True) for unidirectional RNN, or
-        [batch, max_time, 2 * num_units]/[max_time, batch, 2 * num_units]
+        [batch, max_time_src, num_units]/[max_time_src, batch, num_units] 
+        (time_major is False/True) for unidirectional RNN, or
+        [batch, max_time_src, 2*num_units]/[max_time_src, batch, 2*num_units]
         (time_major is False/True) for bidirectional RNN.
       src_seq_lens: int tensor with shape [batch], the lengths of unpadded 
         source sequences in `src_input_ids`.
@@ -363,7 +360,7 @@ class AttentionSeq2SeqPredictionModel(Seq2SeqPredictionModel):
     """
     memory = encoder_outputs
 
-    # make sure `memory` is in batch major
+    # make sure `memory` is in batch major to be batch-tiled
     if self._time_major:
       memory = tf.transpose(memory, [1, 0, 2])
     if self._is_inferring and beam_width > 0:
@@ -372,12 +369,11 @@ class AttentionSeq2SeqPredictionModel(Seq2SeqPredictionModel):
 
     attention_mechanism = self._create_attention_mechanism(
         memory, src_seq_lens)
-    keep_alignment_history = self._is_inferring and beam_width == 0
     wrapped_cell = tf.contrib.seq2seq.AttentionWrapper(
         cell,
         attention_mechanism,
         attention_layer_size=self._num_units,
-        alignment_history=keep_alignment_history,
+        alignment_history=True,
         output_attention=self._output_attention,
         name='attention')
     return wrapped_cell
@@ -418,7 +414,7 @@ class AttentionSeq2SeqPredictionModel(Seq2SeqPredictionModel):
     cell wrapper `AttentionWrapper`.
 
     Args:
-      memory: float tensor with shape [batch, max_time, num_units], the
+      memory: float tensor with shape [batch, max_time_src, num_units], the
         `encoder_outputs` in batch major format.
       src_seq_lens: int tensor with shape [batch], the lengths of unpadded 
         source sequences in `src_input_ids`.

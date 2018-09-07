@@ -39,7 +39,7 @@ class Seq2SeqPredictionModel(object):
       unit_type: string scalar, the type of RNN cell ('lstm', 'gru', etc.).
       num_units: int scalar, the num of units in an RNN Cell.
       forget_bias: float scalar, forget bias in LSTM Cell. Defaults to 1.0.
-      keep_prob: float scalar, dropout rate equals 1 - `keep_prob`.
+      keep_prob: float scalar, dropout rate equals `1 - keep_prob`.
       encoder_type: string scalar, 'uni' (unidirectional RNN as encoder) or 
         'bi' (bidirectional RNN as encode).
       time_major: bool scalar, whether the output tensors are in time major 
@@ -54,10 +54,10 @@ class Seq2SeqPredictionModel(object):
       tgt_vocab_size: int scalar, num of symbols in target vocabulary.
       num_encoder_layers: int scalar, the num of layers in the encoding RNN.
       num_encoder_res_layers: int scalar, the num of layers in the encoding RNN
-         with residual connections.
+        with residual connections.
       num_decoder_layers: int scalar, the num of layers in the decoding RNN.
       num_decoder_res_layers: int scalar, the num of layers in the decoding RNN
-         with residual connections.
+        with residual connections.
     """
     self._unit_type = unit_type
     self._num_units = num_units
@@ -139,9 +139,9 @@ class Seq2SeqPredictionModel(object):
 
     Returns:
       encoder_outputs: float tensor with shape
-        [batch, max_time, num_units]/[max_time, batch, num_units] (time_major
-        is False/True) for unidirectional RNN, or
-        [batch, max_time, 2 * num_units]/[max_time, batch, 2 * num_units]
+        [batch, max_time_src, num_units]/[max_time_src, batch, num_units] 
+        (time_major is False/True) for unidirectional RNN, or
+        [batch, max_time_src, 2*num_units]/[max_time_src, batch, 2*num_units]
         (time_major is False/True) for bidirectional RNN.
       encoder_states: a list of `num_encoder_layers` state_tuple instances, 
         where each state_tuple contains a cell state and a hidden state tensor,
@@ -167,14 +167,14 @@ class Seq2SeqPredictionModel(object):
     """Builds a unidirectional RNN as encoder.
 
     Args:
-      inputs: float tensor with shape [batch, max_time, num_units] or
-        [max_time, batch, num_units], the embedding inputs to the encoder.
+      inputs: float tensor with shape [batch, max_time_src, num_units] or
+        [max_time_src, batch, num_units], the embedding inputs to the encoder.
       src_seq_lens: int tensor with shape [batch], the lengths of unpadded 
         source sequences in a batch.
 
     Returns:
-      outputs: float tensor with shape [batch, max_time, num_units] or
-        [max_time, batch, num_units], the encoder outputs.
+      outputs: float tensor with shape [batch, max_time_src, num_units] or
+        [max_time_src, batch, num_units], the encoder outputs.
       states: a list of `num_encoder_layers` state_tuple instances, where
         each state_tuple contains a cell state and a hidden state tensor,
         both with shape [batch, num_units].
@@ -193,14 +193,14 @@ class Seq2SeqPredictionModel(object):
     """Builds a bidirectional RNN as encoder.
 
     Args:
-      inputs: float tensor with shape [batch, max_time, num_units] or
-        [max_time, batch, num_units], the embedding inputs to the encoder.
+      inputs: float tensor with shape [batch, max_time_src, num_units] or
+        [max_time_src, batch, num_units], the embedding inputs to the encoder.
       src_seq_lens: int tensor with shape [batch], the lengths of unpadded 
         source sequences in a batch.
 
     Returns:
-      outputs: float tensor with shape [batch, max_time, 2 * num_units] or
-        [max_time, batch, 2 * num_units], the encoder outputs.
+      outputs: float tensor with shape [batch, max_time_src, 2*num_units] or
+        [max_time_src, batch, 2*num_units], the encoder outputs.
       states: a list of `num_encoder_layers` state_tuple instances, where
         each state_tuple contains a cell state and a hidden state tensor,
         both with shape [batch, num_units].
@@ -210,8 +210,8 @@ class Seq2SeqPredictionModel(object):
     cell_fw = self._build_encoder_cell(num_bi_layers, num_bi_res_layers)
     cell_bw = self._build_encoder_cell(num_bi_layers, num_bi_res_layers)
     # bi_outputs.shape: 
-    #   ([batch, max_time, num_units], [batch, max_time, num_units]) or 
-    #   ([max_time, batch, num_units], [max_time, batch, num_units])
+    #   ([batch, max_time_src, num_units], [batch, max_time_src, num_units]) or 
+    #   ([max_time_src, batch, num_units], [max_time_src, batch, num_units])
     # bi_states.shape: (
     #   [state_tuple(c=[batch, num_units], h=[batch, num_units])]
     #     * num_bi_layers   ==> forward direction  ,
@@ -276,7 +276,9 @@ class Seq2SeqPredictionModel(object):
                      cell,
                      decoder_init_state,
                      scope=None):
-    """Creates logits tensor.
+    """Creates logits tensor. The caller must have properly batch-tiled
+    `decoder_init_state` using `tf.contrib.seq2seq.tile_batch` if beam search
+    is used.
 
     Args:
       tgt_input_ids: int tensor with shape [batch, max_time_tgt], the indices
@@ -286,7 +288,7 @@ class Seq2SeqPredictionModel(object):
       decoder_embedding: float tensor with shape [tgt_vocab_size, num_units]
         containing the embeddings of symbols in target vocabulary.
       cell: RNN Cell instance returned by `self._build_decoder_cell`, maybe
-        additionaly wrapped by `self._wrap_decoder_cell`.
+        additionally wrapped by `self._wrap_decoder_cell`.
       decoder_init_state: a list of state_tuples containing a cell state and
         a hidden state tensor, Or an instance of AttentionWrapperState that 
         wraps `encoder_states` with attention data.
@@ -299,10 +301,8 @@ class Seq2SeqPredictionModel(object):
     if self._time_major:
       tgt_input_ids = tf.transpose(tgt_input_ids)
     inputs = tf.nn.embedding_lookup(decoder_embedding, tgt_input_ids)
-
     helper = tf.contrib.seq2seq.TrainingHelper(
         inputs, tgt_seq_lens, time_major=self._time_major)
-
     decoder = tf.contrib.seq2seq.BasicDecoder(
         cell, helper, decoder_init_state, output_layer=self._output_layer)
 
@@ -311,9 +311,7 @@ class Seq2SeqPredictionModel(object):
         output_time_major=self._time_major,
         swap_memory=True,
         scope=scope)
-
     logits = outputs.rnn_output
-
     return logits
 
   def _create_indices(self,
@@ -329,7 +327,9 @@ class Seq2SeqPredictionModel(object):
                       maximum_iterations,
                       random_seed,
                       scope=None):
-    """Creates symbol indices tensor.
+    """Creates symbol indices tensor. The caller must have properly batch-tiled
+    `decoder_init_state` using `tf.contrib.seq2seq.tile_batch` if beam search is
+    used.
 
     This function generates decoded sequence of symbol indices, given the 
     initial decoder state in which the source input sequence is encoded. It
@@ -359,11 +359,17 @@ class Seq2SeqPredictionModel(object):
       scope: string scalar, scope name.
 
     Returns:
-      indices: int tensor with shape [batch, max_time]/[max_time, batch] for
-        greedy and sampling decoder, Or
-        [batch, max_time, beam_width]/[max_time, batch, beam_width] for 
+      indices: int tensor with shape [batch, max_time_tgt]/[max_time_tgt, batch] 
+        for greedy and sampling decoder, Or
+        [batch, max_time_tgt, beam_width]/[max_time_tgt, batch, beam_width] for 
         beam search decoder, the sampled ids of decoded sequence of symbols 
         in target vocabulary.
+      alignment: float tensor with shape [max_time_tgt, K, max_time_src], where
+        max_time_tgt = the maximum length of decoded sequences over a batch,
+        K = batch_size (not in beam-search mode) or batch_size * beam_width (
+        with batch_size being the first axis, in beam-search mode), holding the 
+        alignment scores of each target symbol w.r.t each input source symbol.
+        OR tf.no_op if NOT using attention mechanism. 
     """
     start_tokens = tf.fill([batch_size], tgt_sos_id)
     end_token = tgt_eos_id
@@ -404,5 +410,14 @@ class Seq2SeqPredictionModel(object):
       indices = outputs.predicted_ids
     else:
       indices = outputs.sample_id
-    return indices, states
+
+    if hasattr(states, 'alignment_history'):
+      alignment = states.alignment_history.stack()
+    elif hasattr(states, 'cell_state') and hasattr(
+        states.cell_state, 'alignment_history'):
+      alignment = states.cell_state.alignment_history
+    else:
+      alignment = tf.no_op()    
+
+    return indices, alignment
 
