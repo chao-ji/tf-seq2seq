@@ -105,6 +105,7 @@ def main(_):
     bleu_score = eval_utils.compute_bleu(FLAGS.tgt_file, 
         os.path.join(FLAGS.out_dir, OUTPUT_FILE))    
     print('BLEU score:', bleu_score)
+  print('Output file:', os.path.join(FLAGS.out_dir, OUTPUT_FILE))
 
 if __name__ == '__main__':
   tf.flags.mark_flag_as_required('src_file')
