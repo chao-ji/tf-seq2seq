@@ -96,7 +96,7 @@ To visualize the alignment, you can run the `run_inference.py` executable as abo
 ### Generic Sequence Transducer
 It turns out that seq2seq is likely to be able to perform a general class of prediction tasks where the input and output are sequences of arbitrary length, not just translation.
 
-Here is a fun exeriment: you generate input sequences of different lengths (say 5 to 50) containing random integers from a range (say 0 to 128) and their sorted counterpart as the output sequences. You train your seq2seq model on that data, and you test the trained model on some new input sequences. 
+Here is a fun experiment: you generate input sequences of different lengths (say 5 to 50) containing random integers from a range (say 0 to 128) and their sorted counterpart as the output sequences. You train your seq2seq model on that data, and you test the trained model on some new input sequences. 
 
 Here is a sample of the new sequences and their outputs.
 
@@ -119,7 +119,7 @@ Here is a sample of the new sequences and their outputs.
 
 You just "invented" a sorting algorithm using a seq2seq model. 
 
-The integers, just like the words in sentences, are represented internally as multidimensional vectors (distributed representation), so the seq2seq is must be able to figure out that there is an inherent relationship among these symbols (integers in this case): some symbols are "greater" or "less" than others, and the task you intend to perform is sorting.
+The integers, just like the words in sentences, are represented internally as multidimensional vectors (distributed representation), so the seq2seq must be able to figure out that there is an inherent relationship among these symbols (integers in this case): some symbols are "greater" or "less" than others, and the task you intend to perform is sorting.
 
-This may be a trivial example, but at least it shows the seq2seq model's potential to be a generic sequence transducer. It learns the task from the data.
+This may look like a trivial example, but at least it shows the seq2seq model's potential to be a generic sequence transducer. It learns the task from the data.
 
