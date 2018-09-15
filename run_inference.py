@@ -8,12 +8,12 @@ You need to compile the protobuf module first `seq2seq_pb2.py` by running
   parameter settings.
 
 To make inference, run
-  python run_inference.py 
-    --ckpt_path=/PATH/TO/CKPT
-    --config_file=/PATH/TO/CONFIG_FILE
-    --src_file=/PATH/TO/SRC_FILE
-    --src_vocab_file=/PATH/TO/SRC_VOCAB_FILE
-    --tgt_vocab_file=/PATH/TO/TGT_VOCAB_FILE
+  python run_inference.py \ 
+    --ckpt_path=/PATH/TO/CKPT \
+    --config_file=/PATH/TO/CONFIG_FILE \
+    --src_file=/PATH/TO/SRC_FILE \
+    --src_vocab_file=/PATH/TO/SRC_VOCAB_FILE \
+    --tgt_vocab_file=/PATH/TO/TGT_VOCAB_FILE \
 To run external evaluation, add set additional flag
     --tgt_file=/PATH/TO/TGT_FILE
 """

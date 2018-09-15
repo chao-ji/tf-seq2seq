@@ -9,13 +9,13 @@ You need to compile the protobuf module first `seq2seq_pb2.py` by running
 
 To run internal evaluation, run
 
-  python run_internal_evaluation.py 
-    --ckpt_path=/PATH/TO/CKPT
-    --config_file=/PATH/TO/CONFIG_FILE
-    --src_file=/PATH/TO/SRC_FILE
-    --tgt_file=/PATH/TO/TGT_FILE
-    --src_vocab_file=/PATH/TO/SRC_VOCAB_FILE
-    --tgt_vocab_file=/PATH/TO/TGT_VOCAB_FILE
+  python run_internal_evaluation.py \ 
+    --ckpt_path=/PATH/TO/CKPT \
+    --config_file=/PATH/TO/CONFIG_FILE \
+    --src_file=/PATH/TO/SRC_FILE \
+    --tgt_file=/PATH/TO/TGT_FILE \
+    --src_vocab_file=/PATH/TO/SRC_VOCAB_FILE \
+    --tgt_vocab_file=/PATH/TO/TGT_VOCAB_FILE \
 """
 
 import tensorflow as tf
