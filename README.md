@@ -5,7 +5,7 @@
 </p>
 
 
-This is a TensorFlow re-implementation of the seq2seq model using encoder-decoder architecture with attention mechanism. If you are also interested in how to build a seq2seq model on a high level, you can follow this [guide](https://github.com/chao-ji/tf-seq2seq/blob/master/g3doc/Build_seq2seq_model.md).
+This is a TensorFlow re-implementation of the seq2seq model using encoder-decoder architecture with attention mechanism. If you wish to gain some high-level understanding about how seq2seq model works, you can follow this [guide](https://github.com/chao-ji/tf-seq2seq/blob/master/g3doc/Build_seq2seq_model.md).
 
 
 ### Usage
