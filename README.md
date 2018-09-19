@@ -33,11 +33,11 @@ python run_training.py \
 
 ##### Evaluation and Inference
 
-A seq2seq model can be evaluated both internally and externally. 
+A seq2seq model can be evaluated both *internally* and *externally*. 
 
-The internal evaluation runs the source input sequence and target input sequence through the forward pass, and computes a loss by comparing the prediction logits and groundtruth target output sequence. It reports *Perplexity*, which is a function of the cross entroy loss. 
+The *internal evaluation* runs the source input sequence and target input sequence through the forward pass, and computes a loss by comparing the prediction logits and groundtruth target output sequence. It reports *Perplexity*, which is a function of the cross entroy loss. 
 
-To perform *internal evaluation*, run
+To perform internal evaluation, run
 ```
   python run_internal_evaluation.py 
     --ckpt_path=/PATH/TO/CKPT
