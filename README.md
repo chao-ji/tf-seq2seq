@@ -9,6 +9,10 @@ This is a TensorFlow re-implementation of the seq2seq model using encoder-decode
 
 
 ### Usage
+To clone this repository, run
+```
+git clone git@github.com:chao-ji/tf-seq2seq.git
+```
 
 This implementation relies on a [proto buffer](https://developers.google.com/protocol-buffers/) configuration file to manage all parameter settings. 
 
@@ -35,7 +39,7 @@ python run_training.py \
 
 A seq2seq model can be evaluated both *internally* and *externally*. 
 
-The *internal evaluation* runs the source input sequence and target input sequence through the forward pass, and computes a loss by comparing the prediction logits and groundtruth target output sequence. It reports *Perplexity*, which is a function of the cross entroy loss. 
+The *internal evaluation* runs the source input sequence and target input sequence through the forward pass, and computes a loss by comparing the prediction logits against the groundtruth target output sequence. It reports *Perplexity*, which is a function of the cross entroy loss. 
 
 To perform internal evaluation, run
 ```
@@ -49,7 +53,7 @@ To perform internal evaluation, run
 ```
 where `ckpt_path` points to a checkpoint file holding a trained model, and `src_file` (or `tgt_file`) is a single text file holding a source (or target) sequence on each line. 
 
-For the *external evaluation*, a translated sequence is generated off an input sequence (`--src_file`) and compared against a groundtruth sequence (`--tgt_file`). It reports *BLEU* score, which is directly related to translation quality (e.g. in Neural Machine Translation). 
+For the *external evaluation*, a translated sequence is generated from an input sequence (`--src_file`) and compared against a groundtruth sequence (`--tgt_file`). It reports *BLEU* score, which is directly related to translation quality (e.g. in Neural Machine Translation). 
 
 To perform external evaluation, run
 ```
@@ -64,7 +68,7 @@ To perform external evaluation, run
 To make inference without comparing against the groundtruth, simply leave out the `tgt_file` flag. The output file `output.txt` is located in the directory specified by the `--out_dir` flag. 
 
 ### Neural Machine Translation between English and Vietnamese
-This is the example used in the [NMT tensorflow tutorial](https://github.com/tensorflow/nmt). To download the data, simple run the [sciprt](https://github.com/tensorflow/nmt/blob/master/nmt/scripts/download_iwslt15.sh).
+This is an example demo'ed in the [NMT tensorflow tutorial](https://github.com/tensorflow/nmt). To download the data, simple run the [sciprt](https://github.com/tensorflow/nmt/blob/master/nmt/scripts/download_iwslt15.sh).
 
 The parameter settings are the same in the [tutorial](https://github.com/tensorflow/nmt#iwslt-english-vietnamese): 
 * 2-layer LSTMs of 512 units with bidirectional encoder 
