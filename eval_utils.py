@@ -38,7 +38,7 @@ def decoded_symbols_to_strings(decoded_symbols, tgt_eos=b'</s>'):
   remaining strings with ' '.  
 
   Args:
-    decode_symbols: float array with shape [K, batch, max_time], where K = 1
+    decode_symbols: float np array of shape [K, batch, max_time], where K = 1
       for greedy and sampling decoder, and K = beam_width for beam search 
       decoder. 
     tgt_eos: string scalar, target end-of-sentence marker.
@@ -76,17 +76,18 @@ def visualize_alignment(result_dict, tgt_eos='</s>'):
   """Visualize the alignment between source and decoded target sequence.
 
   Args:
-    result_dict: dict mapping from name to numpy array with entries
-      --decode_symbols: float array with shape [K, batch, max_time_tgt], where 
+    result_dict: dict mapping from name to numpy array with following entries:
+      --decode_symbols: float np array fo shape [K, batch, max_time_tgt], where 
         K = 1 for greedy and sampling decoder, and K = beam_width for beam 
         search decoder.
-      --alignment: float tensor with shape [max_time_tgt, K, max_time_src], 
+      --alignment: float np array of shape [max_time_tgt, K, max_time_src], 
         where max_time_tgt = the maximum length of decoded sequences over a 
         batch, K = batch_size (not in beam-search mode) or 
         batch_size * beam_width (with batch_size being the first axis, in 
-        beam-search mode), holding the alignment scores of each target symbol 
+        beam-search mode), max_time_src = the maximum length of source sequences
+        over a batch, holding the alignment scores of each target symbol 
         w.r.t each input source symbol.
-      --input_symbols: string tensor with shape [batch, max_time_src], the
+      --input_symbols: string np array of shape [batch, max_time_src], the
         input sequences of symbols.
 
   Returns:

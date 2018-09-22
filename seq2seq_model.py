@@ -367,7 +367,8 @@ class Seq2SeqPredictionModel(object):
       alignment: float tensor with shape [max_time_tgt, K, max_time_src], where
         max_time_tgt = the maximum length of decoded sequences over a batch,
         K = batch_size (not in beam-search mode) or batch_size * beam_width (
-        with batch_size being the first axis, in beam-search mode), holding the 
+        with batch_size being the first axis, in beam-search mode), max_time_src
+        = the maximum length of source sequences over a batch, holding the 
         alignment scores of each target symbol w.r.t each input source symbol.
         OR tf.no_op if NOT using attention mechanism. 
     """
@@ -411,12 +412,12 @@ class Seq2SeqPredictionModel(object):
     else:
       indices = outputs.sample_id
 
-    if hasattr(states, 'alignment_history'):
+    if hasattr(states, 'alignment_history'):  # greedy or sampling
       alignment = states.alignment_history.stack()
     elif hasattr(states, 'cell_state') and hasattr(
-        states.cell_state, 'alignment_history'):
+        states.cell_state, 'alignment_history'):  # beam search
       alignment = states.cell_state.alignment_history
-    else:
+    else: # not using attention mechanism
       alignment = tf.no_op()    
 
     return indices, alignment
