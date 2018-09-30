@@ -4,12 +4,40 @@ to get a prediction logit tensor or symbol indices tensor. Also provides API
 `train`, `evaluate`, and `infer` for performing training, evaluation, and 
 inference using the prediction model.
 """
+from abc import ABCMeta
+from abc import abstractproperty
+
 import tensorflow as tf
 
 import model_runners_utils as utils
 
 
-class Seq2SeqModelTrainer(object):
+class BaseModelRunner(object):
+  """Base model runner to be subclassed by Trainer, Evaluator, Inferencer."""
+
+  __metaclass__ = ABCMeta
+
+  @abstractproperty
+  def mode(self):
+    """Returns a string scalar indicating mode of model (train, eval or infer).
+    """    
+    pass
+
+  def check_dataset_mode(self, dataset):
+    """Checks if mode (train, eval, or infer) of dataset and model match.
+
+    Args:
+      dataset: a Seq2SeqDataset instance.
+
+    Raises:
+      ValueError if mode of `dataset` and `self` do not match.
+    """
+    if dataset.mode != self.mode:
+      raise ValueError('mode of dataset({}) and model({}) do not match.'
+          .format(dataset.mode, self.mode))
+
+
+class Seq2SeqModelTrainer(BaseModelRunner):
   """Performs training using a seq2seq prediction model."""
   def __init__(self, prediction_model, max_grad_norm):
     """Constructor.
@@ -21,6 +49,10 @@ class Seq2SeqModelTrainer(object):
     """
     self._prediction_model = prediction_model
     self._max_grad_norm = max_grad_norm
+
+  @property
+  def mode(self):
+    return tf.contrib.learn.ModeKeys.TRAIN
 
   def train(self,
             src_file_list,
@@ -48,6 +80,8 @@ class Seq2SeqModelTrainer(object):
         tensor/operation, the set of tensor/operations that need to be run
         in a `tf.Session`.
     """
+    self.check_dataset_mode(dataset)
+
     tensor_dict = dataset.get_tensor_dict(
         src_file_list, tgt_file_list, src_vocab_file, tgt_vocab_file)
   
@@ -84,7 +118,7 @@ class Seq2SeqModelTrainer(object):
     return to_be_run_dict 
 
 
-class Seq2SeqModelEvaluator(object):
+class Seq2SeqModelEvaluator(BaseModelRunner):
   """Performs internal evaluation using a seq2seq prediction model.
   
   Internal evaluation only reports the loss and the resulting perplexity.
@@ -96,6 +130,10 @@ class Seq2SeqModelEvaluator(object):
       prediction_model: a `Seq2SeqPredictionModel` instance.
     """
     self._prediction_model = prediction_model
+
+  @property
+  def mode(self):
+    return tf.contrib.learn.ModeKeys.EVAL
 
   def evaluate(self,           
                src_file_list,
@@ -121,6 +159,8 @@ class Seq2SeqModelEvaluator(object):
         tensor/operation, the set of tensor/operations that need to be run
         by a `tf.Session`.       
     """
+    self.check_dataset_mode(dataset)
+
     tensor_dict = dataset.get_tensor_dict(
         src_file_list, tgt_file_list, src_vocab_file, tgt_vocab_file)
 
@@ -141,7 +181,7 @@ class Seq2SeqModelEvaluator(object):
     return to_be_run_dict
 
 
-class Seq2SeqModelInferencer(object):
+class Seq2SeqModelInferencer(BaseModelRunner):
   """Performs external evaluation and inference using a seq2seq prediction 
   model.
 
@@ -177,6 +217,10 @@ class Seq2SeqModelInferencer(object):
     self._maximum_iterations = maximum_iterations
     self._random_seed = random_seed
 
+  @property
+  def mode(self):
+    return tf.contrib.learn.ModeKeys.INFER
+
   def infer(self,
             src_file_list,
             src_vocab_file,
@@ -208,6 +252,8 @@ class Seq2SeqModelInferencer(object):
         --input_symbols: string tensor with shape [batch, max_time_src], the
           input sequences of symbols.
     """
+    self.check_dataset_mode(dataset)
+
     tensor_dict = dataset.get_tensor_dict(src_file_list,
                                           src_vocab_file,
                                           tgt_vocab_file)
