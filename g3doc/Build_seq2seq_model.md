@@ -18,9 +18,9 @@ Like the encoder, the decoder updates its hidden layer upon reading each target 
 
 The decoder is designed to generate prediction in two modes. 
 
-At the time of *training*, a **target input** sequence is used to send signals to the decoder to emit predicted tokens one at a time, and a **target output** sequence serves as groundtruth. Specifically, we respectively prepend and append the target sequence "large room" with special marker `sos` (start of sequence) and `eos` (end of sequence) to obtain the target input and target output sequence. Upon reading `sos`, the decoder is given the signal that prediction has started, and is expected to emit the first token "large" in the target sequence, and on "large" emit the second token "room". When reading the last token "room", the decoder's hidden layer should be in a state that signifies it has come to the end of the prediction, and is expected to emit `eos`. 
+At the time of *training*, a **target input** sequence triggers the decoder to generate predicted tokens one at a time, and a **target output** sequence serves as groundtruth. Specifically, we respectively prepend and append the target sequence "large room" with special marker `sos` (start of sequence) and `eos` (end of sequence) to get the target input and target output sequence. Upon reading `sos`, the decoder is given the "message" that prediction has started, and is expected to generate the first token "large" in the target sequence, and on "large" generate the second token "room". When reading the last token "room", the decoder's hidden layer should be in a state that signifies it has come to the end of the prediction, and is expected to generate `eos`. 
 
-At the time of *inference*, however, the decoder is on its own to generate the target sequence. It works by feeding the token generated at the preceding time step to the decoder to generate the token at the current step. The detail of the inference mode is beyond the scope of this guide.
+At the time of *inference*, however, the decoder is on its own to generate the target sequence. It works by feeding the token generated at the previous time step to the decoder to generate the token at the current step. The detail of the inference mode is beyond the scope of this guide.
 
 ### Prepare the Data
 <p align="center">
