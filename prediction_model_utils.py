@@ -90,7 +90,8 @@ def create_single_cell(unit_type='lstm',
     an RNN Cell instance.
   """
   if unit_type == 'lstm':
-    single_cell = tf.contrib.rnn.BasicLSTMCell(num_units, forget_bias)
+    single_cell = tf.nn.rnn_cell.LSTMCell(
+        num_units=num_units, forget_bias=forget_bias, name='basic_lstm_cell')
   elif unit_type == 'gru':
     single_cell = tf.contrib.rnn.GRUCell(num_units)
   elif unit_type == 'nas':
