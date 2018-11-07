@@ -245,7 +245,7 @@ class Seq2SeqModelInferencer(BaseModelRunner):
         --alignment: float tensor with shape [max_time_tgt, K, max_time_src], 
           where max_time_tgt = the maximum length of decoded sequences over a 
           batch, K = batch_size (not in beam-search mode) or 
-          batch_size * beam_width (with batch_size being the first axis, in 
+          batch_size * beam_width (with batch_size varying slower, in 
           beam-search mode), holding the alignment scores of each target symbol 
           w.r.t each input source symbol.
           OR tf.no_op if NOT using attention mechanism.

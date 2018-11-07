@@ -51,8 +51,7 @@ def main(_):
   text_format.Merge(open(FLAGS.config_file).read(), config)
   prediction_model = model_runners_utils.build_prediction_model(config, 'infer')
   dataset = model_runners_utils.build_dataset(config, 'infer')
-  maximum_iterations = (config.decoding.maximum_iterations 
-      if config.decoding.HasField('maximum_iterations') else None)
+  maximum_iterations = config.decoding.maximum_iterations 
 
   model_inferencer = model_runners.Seq2SeqModelInferencer(prediction_model, 
       config.decoding.beam_width,

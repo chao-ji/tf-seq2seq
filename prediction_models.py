@@ -60,7 +60,7 @@ class VanillaSeq2SeqPredictionModel(Seq2SeqPredictionModel):
                       beam_width=10,
                       length_penalty_weight=0.0,
                       sampling_temperature=1.0,
-                      maximum_iterations=None,
+                      maximum_iterations=100,
                       random_seed=0,
                       scope=None):
     """Creates symbol indices tensor. Symbol indices contain the decoded 
@@ -80,7 +80,7 @@ class VanillaSeq2SeqPredictionModel(Seq2SeqPredictionModel):
         before computing the softmax. Larger values (above 1.0) result in more
         random samples, while smaller values push the sampling distribution 
         towards the argmax. 
-      maximum_iterations: int scalar or None, max num of iterations for dynamic
+      maximum_iterations: int scalar, max num of iterations for dynamic
         decoding.
       random_seed: int scalar, random seed for sampling decoder. 
       scope: string scalar, scope name.
@@ -112,7 +112,7 @@ class VanillaSeq2SeqPredictionModel(Seq2SeqPredictionModel):
         if beam_width > 0:
           decoder_init_state = tf.contrib.seq2seq.tile_batch(
               encoder_states, beam_width)
-        maximum_iterations = (maximum_iterations or 
+        maximum_iterations = tf.maximum(maximum_iterations, 
             2 * tf.reduce_max(src_seq_lens))
         indices, alignment = self._create_indices(
             tgt_sos_id,
@@ -261,7 +261,7 @@ class AttentionSeq2SeqPredictionModel(Seq2SeqPredictionModel):
                       beam_width=10,
                       length_penalty_weight=0.0,
                       sampling_temperature=1.0,
-                      maximum_iterations=None,
+                      maximum_iterations=100,
                       random_seed=0,
                       scope=None):
     """Creates symbol indices tensor. Symbol indices contain the decoded 
@@ -281,7 +281,7 @@ class AttentionSeq2SeqPredictionModel(Seq2SeqPredictionModel):
         before computing the softmax. Larger values (above 1.0) result in more
         random samples, while smaller values push the sampling distribution 
         towards the argmax. 
-      maximum_iterations: int scalar or None, max num of iterations for dynamic
+      maximum_iterations: int scalar, max num of iterations for dynamic
         decoding.
       random_seed: int scalar, random seed for sampling decoder. 
       scope: string scalar, scope name.
@@ -295,7 +295,7 @@ class AttentionSeq2SeqPredictionModel(Seq2SeqPredictionModel):
       alignment: float tensor with shape [max_time_tgt, K, max_time_src], where
         max_time_tgt = the maximum length of decoded sequences over a batch,
         K = batch_size (not in beam-search mode) or batch_size * beam_width (
-        with batch_size being the first axis, in beam-search mode), holding the 
+        with batch_size varying slower, in beam-search mode), holding the 
         alignment scores of each target symbol w.r.t each input source symbol.
     """
     if not self._is_inferring:
@@ -317,7 +317,7 @@ class AttentionSeq2SeqPredictionModel(Seq2SeqPredictionModel):
             cell, encoder_outputs, src_seq_lens, beam_width)
         decoder_init_state = self._get_decoder_init_states(
             encoder_states, cell, batch_size, beam_width)
-        maximum_iterations = (maximum_iterations or
+        maximum_iterations = tf.maximum(maximum_iterations, 
             2 * tf.reduce_max(src_seq_lens))
         indices, alignment = self._create_indices(
             tgt_sos_id,

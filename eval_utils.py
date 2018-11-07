@@ -3,6 +3,7 @@ import codecs
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
+from tensorflow import logging
 
 import bleu
 
@@ -38,7 +39,7 @@ def decoded_symbols_to_strings(decoded_symbols, tgt_eos=b'</s>'):
   remaining strings with ' '.  
 
   Args:
-    decode_symbols: float np array of shape [K, batch, max_time], where K = 1
+    decode_symbols: string np array of shape [K, batch, max_time], where K = 1
       for greedy and sampling decoder, and K = beam_width for beam search 
       decoder. 
     tgt_eos: string scalar, target end-of-sentence marker.
@@ -53,6 +54,9 @@ def decoded_symbols_to_strings(decoded_symbols, tgt_eos=b'</s>'):
 
     if tgt_eos and (tgt_eos in symbols_list):
       symbols_list = symbols_list[:symbols_list.index(tgt_eos)]
+    else:
+      logging('Decoding ends prematurely (EOS not found in decoded sequence). '
+          'Consider increasing `maximum_iterations`.')
 
     tgt_seqs.append(b' '.join(symbols_list))
   return tgt_seqs
@@ -83,7 +87,7 @@ def visualize_alignment(result_dict, tgt_eos='</s>'):
       --alignment: float np array of shape [max_time_tgt, K, max_time_src], 
         where max_time_tgt = the maximum length of decoded sequences over a 
         batch, K = batch_size (not in beam-search mode) or 
-        batch_size * beam_width (with batch_size being the first axis, in 
+        batch_size * beam_width (with batch_size varying slower, in 
         beam-search mode), max_time_src = the maximum length of source sequences
         over a batch, holding the alignment scores of each target symbol 
         w.r.t each input source symbol.
@@ -102,7 +106,6 @@ def visualize_alignment(result_dict, tgt_eos='</s>'):
   output_seq = output_seq[:true_decode_len]
   alignment = result_dict['alignment'][:, 0, :]
   alignment = alignment[:true_decode_len, :]
-
   plt.imshow(alignment, cmap='gray')
   plt.xticks(range(len(input_seq)))
   plt.yticks(range(len(output_seq)))
