@@ -1,286 +1,328 @@
-r"""Module defines three 'ModelRunners': Trainer, Evaluator, and Inferencer.
-Each wraps a prediction model that runs the input through the forward pass
-to get a prediction logit tensor or symbol indices tensor. Also provides API 
-`train`, `evaluate`, and `infer` for performing training, evaluation, and 
-inference using the prediction model.
+"""Defines Trainer and Evaluator class that wraps a Sequence Transducer model 
+and performs training and evaluation, respectively.
 """
-from abc import ABCMeta
-from abc import abstractproperty
+import math
+import os
+import pickle
 
+import numpy as np
 import tensorflow as tf
+from nltk.translate.bleu_score import corpus_bleu
 
-import model_runners_utils as utils
-
-
-class BaseModelRunner(object):
-  """Base model runner to be subclassed by Trainer, Evaluator, Inferencer."""
-
-  __metaclass__ = ABCMeta
-
-  @abstractproperty
-  def mode(self):
-    """Returns a string scalar indicating mode of model (train, eval or infer).
-    """    
-    pass
-
-  def check_dataset_mode(self, dataset):
-    """Checks if mode (train, eval, or infer) of dataset and model match.
-
-    Args:
-      dataset: a Seq2SeqDataset instance.
-
-    Raises:
-      ValueError if mode of `dataset` and `self` do not match.
-    """
-    if dataset.mode != self.mode:
-      raise ValueError('mode of dataset({}) and model({}) do not match.'
-          .format(dataset.mode, self.mode))
+import utils
+from data import tokenization
 
 
-class Seq2SeqModelTrainer(BaseModelRunner):
-  """Performs training using a seq2seq prediction model."""
-  def __init__(self, prediction_model, max_grad_norm):
+class SequenceTransducerTrainer(object):
+  """Trains a SequenceTransducer model."""
+  def __init__(self, model, label_smoothing):
     """Constructor.
 
     Args:
-      prediction_model: a `Seq2SeqPredictionModel` instance.
-      max_grad_norm: float scalar, the maximum gradient norm that all gradients
-        are clipped to, in order to prevent exploding gradients.
+      model: an instance of sequence transducer model.
+      label_smoothing: float scalar, applies label smoothing to the one-hot 
+        class labels. Positive class has prob mass 1 - `label_smoothing`, while 
+        each negative class has prob mass `label_smoothing / num_neg_classes`.
     """
-    self._prediction_model = prediction_model
-    self._max_grad_norm = max_grad_norm
+    self._model = model
+    self._label_smoothing = label_smoothing
 
-  @property
-  def mode(self):
-    return tf.contrib.learn.ModeKeys.TRAIN
-
-  def train(self,
-            src_file_list,
-            tgt_file_list,
-            src_vocab_file,
-            tgt_vocab_file,
+  def train(self, 
             dataset,
-            optimizer):
-    """Adds training related ops to the graph.
+            optimizer,
+            ckpt,
+            ckpt_path,
+            num_iterations,
+            persist_per_iterations,
+            clip_norm=None,
+            log_per_iterations=100,
+            logdir='log'):
+    """Performs training iterations.
 
     Args:
-      src_file_list: a list of string scalars, the paths to the source sequence
-        text files. 
-      tgt_file_list: a list of string scalars, the paths to the corresponding
-        target sequence text files.
-      src_vocab_file: string scalar, the path to the source vocabulary file,
-        where each line contains a single symbol. 
-      tgt_vocab_file: string scalar, the path to the target vocabulary file, 
-        where each line contains a single symbol. 
-      dataset: a `Seq2SeqDataset` instance.
-      optimizer: an optimizer instance.
+      dataset: a tf.data.Dataset instance, the input data generator.
+      optimizer: a tf.keras.optimizer.Optimizer instance, applies gradient 
+        updates.
+      ckpt: a tf.train.Checkpoint instance, saves or load weights to/from 
+        checkpoint file.
+      ckpt_path: string scalar, the path to the directory that the checkpoint 
+        files will be written to or loaded from.
+      num_iterations: int scalar, num of iterations to train the model.
+      persist_per_iterations: int scalar, saves weights to checkpoint files
+        every `persist_per_iterations` iterations.
+      log_per_iterations: int scalar, prints log info every `log_per_iterations`
+        iterations.
+      logdir: string scalar, the directory that the tensorboard log data will
+        be written to. 
+    """ 
+    batch_size = dataset.element_spec[0].shape[0]
+    train_step_signature = [
+        tf.TensorSpec(shape=(batch_size, None), dtype=tf.int64),
+        tf.TensorSpec(shape=(batch_size, None), dtype=tf.int64)]
 
-    Returns:
-      to_be_run_dict: a dict mapping from tensor/operation names to 
-        tensor/operation, the set of tensor/operations that need to be run
-        in a `tf.Session`.
-    """
-    self.check_dataset_mode(dataset)
+    @tf.function(input_signature=train_step_signature)
+    def train_step(src_token_ids, tgt_token_ids):
+      """Performs a single training step on a minibatch of source and target
+      token ids.
 
-    tensor_dict = dataset.get_tensor_dict(
-        src_file_list, tgt_file_list, src_vocab_file, tgt_vocab_file)
-  
-    logits, batch_size = self._prediction_model.predict_logits(
-        tensor_dict['src_input_ids'],
-        tensor_dict['src_seq_lens'],
-        tensor_dict['tgt_input_ids'],
-        tensor_dict['tgt_seq_lens'])
+      Args:
+        src_token_ids: int tensor of shape [batch_size, src_seq_len], lists of
+          subtoken ids of batched source sequences ending with EOS_ID and 
+          zero-padded.
+        tgt_token_ids: int tensor of shape [batch_size, src_seq_len], lists of
+          subtoken ids of batched target sequences ending with EOS_ID and 
+          zero-padded.
 
-    loss = utils.create_loss(tensor_dict,
-                             logits,
-                             self._prediction_model.time_major)
+      Returns:
+        loss: float scalar tensor, the loss.
+        step: int scalar tensor, the global step.
+        lr: float scalar tensor, the learning rate.
+      """
+      with tf.GradientTape() as tape:
+        # for each sequence of subtokens s1, s2, ..., sn, 1
+        # prepend it with 0 (SOS_ID) and truncate it to the same length:
+        # 0, s1, s2, ..., sn
+        tgt_token_ids_input = tf.pad(tgt_token_ids, [[0, 0], [1, 0]])[:, :-1]
+        logits = self._model(src_token_ids, tgt_token_ids_input, training=True)
+        loss = utils.compute_loss(tgt_token_ids, 
+                                  logits, 
+                                  self._label_smoothing, 
+                                  self._model._vocab_size)
 
-    global_step = tf.train.get_or_create_global_step()
-    grads_and_vars = optimizer.compute_gradients(
-        loss, colocate_gradients_with_ops=True)
-    grads_and_vars = list(zip(*grads_and_vars))
-    grads, vars_ = grads_and_vars[0], grads_and_vars[1]
-    clipped_grads, grad_norm_summary, grad_norm = utils.apply_gradient_clip(
-        grads, self._max_grad_norm)
-    grad_update_op = optimizer.apply_gradients(zip(clipped_grads, vars_),
-                                               global_step=global_step)
-    predict_count = utils.get_predict_count(tensor_dict['tgt_seq_lens'])
-    summary = tf.summary.merge([tf.summary.scalar("train_loss", loss)] + 
-        grad_norm_summary)
+      gradients = tape.gradient(loss, self._model.trainable_variables)
+      if clip_norm is not None:
+        gradients, norm = tf.clip_by_global_norm(gradients, clip_norm)
+      optimizer.apply_gradients(
+          zip(gradients, self._model.trainable_variables))
 
-    to_be_run_dict = {'grad_update_op': grad_update_op,
-                      'loss': loss,
-                      'predict_count': predict_count,
-                      'batch_size': batch_size,
-                      'grad_norm': grad_norm,
-                      'summary': summary,
-                      'global_step': global_step}
-    return to_be_run_dict 
+      step = optimizer.iterations
+      lr = optimizer.learning_rate(step)
+      return loss, step - 1, lr
+
+    summary_writer = tf.summary.create_file_writer(logdir)
+
+    latest_ckpt = tf.train.latest_checkpoint(ckpt_path)
+    if latest_ckpt:
+      print('Restoring from checkpoint: %s ...' % latest_ckpt)
+      ckpt.restore(latest_ckpt)
+    else:
+      print('Training from scratch...')
+
+    for src_token_ids, tgt_token_ids in dataset:
+      loss, step, lr = train_step(src_token_ids, tgt_token_ids)
+
+      with summary_writer.as_default():
+        tf.summary.scalar('train_loss', loss, step=step)
+        tf.summary.scalar('learning_rate', lr, step=step)
+
+      if step.numpy() % log_per_iterations == 0:
+        print('global step: %d, loss: %f, learning rate:' % 
+            (step.numpy(), loss.numpy()), lr.numpy())
+      if step.numpy() % persist_per_iterations == 0:
+        print('Saving checkpoint at global step %d ...' % step.numpy())
+        ckpt.save(os.path.join(ckpt_path, 'transformer'))
+
+      if step.numpy() == num_iterations:
+        break
 
 
-class Seq2SeqModelEvaluator(BaseModelRunner):
-  """Performs internal evaluation using a seq2seq prediction model.
-  
-  Internal evaluation only reports the loss and the resulting perplexity.
-  """
-  def __init__(self, prediction_model):
+class SequenceTransducerEvaluator(object):
+  """Evaluates a sequence transducer model."""
+  def __init__(self, model, subtokenizer, decode_batch_size, src_max_length):
     """Constructor.
 
     Args:
-      prediction_model: a `Seq2SeqPredictionModel` instance.
+      model: an instance of sequence transducer model. 
+      subtokenizer: a SubTokenizer instance.
+      decode_batch_size: int scalar, num of sequences in a batch to be decoded.
+      src_max_length: int scalar, max length of decoded sequence.
     """
-    self._prediction_model = prediction_model
+    self._model = model
+    self._subtokenizer = subtokenizer
+    self._decode_batch_size = decode_batch_size
+    self._src_max_length = src_max_length
+    self._bleu_tokenizer = tokenization.BleuTokenizer()
 
-  @property
-  def mode(self):
-    return tf.contrib.learn.ModeKeys.EVAL
-
-  def evaluate(self,           
-               src_file_list,
-               tgt_file_list,
-               src_vocab_file,
-               tgt_vocab_file,
-               dataset):
-    """Adds evaluation related ops to the graph.
+  def translate(self, source_text_filename, output_filename=None):
+    """Translates the source sequences.
 
     Args:
-      src_file_list: a list of string scalars, the paths to the source sequence
-        text files. 
-      tgt_file_list: a list of string scalars, the paths to the corresponding
-        target sequence text files.
-      src_vocab_file: string scalar, the path to the source vocabulary file,
-        where each line contains a single symbol. 
-      tgt_vocab_file: string scalar, the path to the target vocabulary file, 
-        where each line contains a single symbol. 
-      dataset: a `Seq2SeqDataset` instance.
+      source_text_filename: string scalar, name of the text file storing source 
+        sequences, lines separated by '\n'.
+      output_filename: (Optional) string scalar, name of the file that 
+        translations will be written to.
 
     Returns:
-      to_be_run_dict: a dict mapping from tensor/operation names to 
-        tensor/operation, the set of tensor/operations that need to be run
-        by a `tf.Session`.       
+      translations: a list of strings, the translated sequences.
+      sorted_indices: a list of ints, used to reorder the translated sequences.
     """
-    self.check_dataset_mode(dataset)
+    sorted_lines, sorted_indices = _get_sorted_lines(source_text_filename)
 
-    tensor_dict = dataset.get_tensor_dict(
-        src_file_list, tgt_file_list, src_vocab_file, tgt_vocab_file)
+    total_samples = len(sorted_lines)
+    batch_size = self._decode_batch_size
+    num_decode_batches = math.ceil(total_samples / batch_size)
 
-    logits, batch_size = self._prediction_model.predict_logits(
-        tensor_dict['src_input_ids'],
-        tensor_dict['src_seq_lens'],
-        tensor_dict['tgt_input_ids'],
-        tensor_dict['tgt_seq_lens'])
+    def input_generator():
+      # encodes each line into a list of subtoken ids (ending with EOS_ID) and 
+      # zero-pads or truncated to length `src_max_length`, and finally batches 
+      # to shape [batch_size, src_max_length]
+      for i in range(num_decode_batches):
+        lines = [sorted_lines[j + i * batch_size]
+            for j in range(batch_size)
+            if j + i * batch_size < total_samples]
+        lines = [self._subtokenizer.encode(l, add_eos=True) for l in lines]
+        batch = tf.keras.preprocessing.sequence.pad_sequences(
+            lines,
+            maxlen=self._src_max_length,
+            dtype='int32',
+            padding='post')
+        yield batch
 
-    loss = utils.create_loss(tensor_dict, 
-                             logits, 
-                             self._prediction_model.time_major)
-    predict_count = utils.get_predict_count(tensor_dict['tgt_seq_lens'])
+    translations = []
+    for i, source_ids in enumerate(input_generator()):
+      # transduces `source_ids` into `translated_ids`, trims token ids at and 
+      # beyond EOS, and decode token ids back to text
+      translated_ids, _, tgt_src_attention = self._model.transduce(source_ids)
+      translated_ids = translated_ids.numpy()
+      length = translated_ids.shape[0]
 
-    to_be_run_dict = {'loss': loss,
-                      'predict_count': predict_count,
-                      'batch_size': batch_size}
-    return to_be_run_dict
+      utils.save_attention_weights('attention_%04d' % i, { 
+          'src': source_ids, 
+          'tgt': translated_ids, 
+          'tgt_src_attention': tgt_src_attention})
+
+      for j in range(length):
+        translation = self._trim_and_decode(translated_ids[j])
+        translations.append(translation)
+
+    # optionally write translations to a text file
+    if output_filename is not None:
+      _write_translations(output_filename, sorted_indices, translations)
+    return translations, sorted_indices
+
+  def evaluate(self,
+               source_text_filename, 
+               target_text_filename, 
+               output_filename=None):
+    """Translates the source sequences and computes the BLEU score of the 
+    translations against groundtruth target sequences.
+
+    Args:
+      source_text_filename: string scalar, name of the text file storing source 
+        sequences, lines separated by '\n'.
+      target_text_filename: (Optional) string scalar, name of the text file 
+        storing target sequences, lines separated by '\n'.
+      output_filename: (Optional) name of the file that translations will be 
+        written to.
+
+    Returns:
+      case_insensitive_score: float scalar, BLEU score when all chars are 
+        lowercased.
+      case_sensitive_score: float scalar, BLEU score when all chars are in 
+        original case.
+    """
+    translations, sorted_indices = self.translate(
+        source_text_filename, output_filename)
+
+    targets = tf.io.gfile.GFile(
+        target_text_filename).read().strip().splitlines()
+
+    # reorder translations to their original positions in the input file
+    translations = [translations[i] for i in sorted_indices]
+
+    # compute BLEU score if case-sensitive
+    targets_tokens = [self._bleu_tokenizer.tokenize(x) for x in targets]
+    translations_tokens = [self._bleu_tokenizer.tokenize(x) 
+        for x in translations]
+    case_sensitive_score = corpus_bleu(
+        [[s] for s in targets_tokens], translations_tokens) * 100
+
+    # compute BLEU score if case-insensitive (lower case)
+    targets = [x.lower() for x in targets]
+    translations = [x.lower() for x in translations]
+    targets_tokens = [self._bleu_tokenizer.tokenize(x) for x in targets]
+    translations_tokens = [self._bleu_tokenizer.tokenize(x) 
+        for x in translations]
+    case_insensitive_score = corpus_bleu(
+        [[s] for s in targets_tokens], translations_tokens) * 100
+
+    return case_insensitive_score, case_sensitive_score
+
+  def _trim_and_decode(self, ids):
+    """Trims tokens at EOS and beyond EOS in ids, and decodes the remaining ids 
+    back to text.
+
+    Args:
+      ids: numpy array of shape [num_ids], the translated ids ending with EOS id
+        and zero-padded. 
+
+    Returns:
+      string scalar, the decoded text string.
+    """
+    try:
+      index = list(ids).index(tokenization.EOS_ID)
+      return self._subtokenizer.decode(ids[:index])
+    except ValueError:  # No EOS found in sequence
+      return self._subtokenizer.decode(ids)
 
 
-class Seq2SeqModelInferencer(BaseModelRunner):
-  """Performs external evaluation and inference using a seq2seq prediction 
-  model.
+def _get_sorted_lines(filename):
+  """Reads raw text lines from a text file, and sort the lines in descending 
+  order of the num of space-separated words.
 
-  External evaluation reports BLEU score by comparing a set of predicted target 
-  sequences and the corresponding groundtruth target sequences.
+  Example:
+    text file: (l1, 0), (l2, 1), (l3, 2), (l4, 3), (l5, 4)
+
+    sorted: (l2, 1), (l5, 4), (l4, 3), (l1, 0), (l3, 2)
+
+    sorted_lines: l2, l5, l4, l1, l3
+    sorted_indices: 3, 0, 4, 2, 1
+
+  Args:
+    filename: string scalar, the name of the file that raw text will be read 
+      from.
+
+  Returns:
+    sorted_lines: a list of strings, storing the raw text files sorted in 
+      descending order of `num_words`.
+    sorted_indices: a list of ints, `[sorted_lines[i] for i in sorted_indices]` 
+      would restore the lines in the order as they appear in original text file.
   """
-  def __init__(self, 
-               prediction_model,
-               beam_width=10,
-               length_penalty_weight=0.0,
-               sampling_temperature=1.0,
-               maximum_iterations=None,
-               random_seed=0):
-    """Constructor
+  with tf.io.gfile.GFile(filename) as f:
+    lines = f.read().split('\n')
+    # split line by single-space ' '
+    lines = [line.strip() for line in lines]
+    # skip empty lines
+    if len(lines[-1]) == 0:
+      lines.pop()
 
-    Args:
-      prediction_model: a `Seq2SeqPredictionModel` instance.
-      beam_width: int scalar, width for beam seach.
-      length_penalty_weight: float scalar, length penalty weight for beam 
-        search. Disabled with 0.0
-      sampling_temperature: float scalar > 0.0, value to divide the logits by
-        before computing the softmax. Larger values (above 1.0) result in more
-        random samples, while smaller values push the sampling distribution 
-        towards the argmax. 
-      maximum_iterations: int scalar or None, max num of iterations for dynamic
-        decoding.
-      random_seed: int scalar, random seed for sampling decoder.
-    """
-    self._prediction_model = prediction_model
-    self._beam_width = beam_width
-    self._length_penalty_weight = length_penalty_weight
-    self._sampling_temperature = sampling_temperature
-    self._maximum_iterations = maximum_iterations
-    self._random_seed = random_seed
+  # each line is converted to tuple (index, num_of_words, raw_text), and 
+  # sorted in descending order of `num_words`
+  lines_w_lengths = [(i, len(line.split()), line) 
+      for i, line in enumerate(lines)]
+  lines_w_lengths = sorted(lines_w_lengths, key=lambda l: l[1], reverse=True)
+  
+  sorted_indices = [None] * len(lines_w_lengths)
+  sorted_lines = [None] * len(lines_w_lengths)
 
-  @property
-  def mode(self):
-    return tf.contrib.learn.ModeKeys.INFER
+  # `index` is the index of `line` in the original unsorted file
+  for i, (index, _, line) in enumerate(lines_w_lengths):
+    sorted_indices[index] = i
+    sorted_lines[i] = line
 
-  def infer(self,
-            src_file_list,
-            src_vocab_file,
-            tgt_vocab_file,
-            dataset):
-    """Adds inference related ops to the graph.
+  return sorted_lines, sorted_indices
 
-    Args:
-      src_file_list: a list of string scalars, the paths to the source sequence
-        text files. 
-      src_vocab_file: string scalar, the path to the source vocabulary file,
-        where each line contains a single symbol. 
-      tgt_vocab_file: string scalar, the path to the target vocabulary file, 
-        where each line contains a single symbol. 
-      dataset: a `Seq2SeqDataset` instance.
 
-    Returns:
-      tensor_dict: dict mapping from tensor names to the following tensors
-        --decode_symbols: float array with shape [K, batch, max_time_tgt], where 
-          K = 1 for greedy and sampling decoder, and K = beam_width for beam 
-          search decoder.
-        --alignment: float tensor with shape [max_time_tgt, K, max_time_src], 
-          where max_time_tgt = the maximum length of decoded sequences over a 
-          batch, K = batch_size (not in beam-search mode) or 
-          batch_size * beam_width (with batch_size varying slower, in 
-          beam-search mode), holding the alignment scores of each target symbol 
-          w.r.t each input source symbol.
-          OR tf.no_op if NOT using attention mechanism.
-        --input_symbols: string tensor with shape [batch, max_time_src], the
-          input sequences of symbols.
-    """
-    self.check_dataset_mode(dataset)
+def _write_translations(output_filename, sorted_indices, translations):
+  """Writes translations to a text file.
 
-    tensor_dict = dataset.get_tensor_dict(src_file_list,
-                                          src_vocab_file,
-                                          tgt_vocab_file)
-
-    indices, alignment = self._prediction_model.predict_indices(
-        tensor_dict['src_input_ids'],
-        tensor_dict['src_seq_lens'],
-        tensor_dict['tgt_sos_id'],
-        tensor_dict['tgt_eos_id'],
-        self._beam_width,
-        self._length_penalty_weight,
-        self._sampling_temperature,
-        self._maximum_iterations,
-        self._random_seed)
-
-    if self._prediction_model.time_major:
-      indices = tf.transpose(indices)
-    elif indices.shape.ndims == 3:
-      indices = tf.transpose(indices, [2, 0, 1])
-
-    if indices.shape.ndims == 2:
-      indices = tf.expand_dims(indices, axis=0)
-    rev_tgt_vocab_table = dataset.get_rev_vocab_table(tgt_vocab_file)
-    decoded_symbols = rev_tgt_vocab_table.lookup(tf.to_int64(indices))
-    rev_src_vocab_table = dataset.get_rev_vocab_table(src_vocab_file)
-    input_symbols = rev_src_vocab_table.lookup(tf.to_int64(tensor_dict['src_input_ids']))
-    tensor_dict = {'decoded_symbols': decoded_symbols, 'alignment': alignment, 
-                   'input_symbols': input_symbols}
-    return tensor_dict
-    
+  Args:
+    output_filename: string scalar, name of the file that translations will be 
+      written to.
+    sorted_indices: a list of ints, `[translations[i] for i in sorted_indices]`
+      would produce the translations of text lines in the original text file.
+    translations: a list of strings, the tranlations. 
+  """
+  with tf.io.gfile.GFile(output_filename, "w") as f:
+    for i in sorted_indices:
+      f.write("%s\n" % translations[i])
