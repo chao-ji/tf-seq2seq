@@ -20,6 +20,6 @@ Unlike [Transformer](https://github.com/chao-ji/tf-transformer), the seq2seq mod
 </p>
 
 # References
-* Effective Approaches to Attention-based Neural Machine Translation, Luong *et al.* [Link](https://arxiv.org/abs/1508.04025)
-* Neural Machine Translation by Jointly Learning to Align and Translate, Bahdanau *et al.* [Link] (https://arxiv.org/abs/1409.0473)
+* Effective Approaches to Attention-based Neural Machine Translation, Luong *et al.* [https://arxiv.org/abs/1508.04025](https://arxiv.org/abs/1508.04025)
+* Neural Machine Translation by Jointly Learning to Align and Translate, Bahdanau *et al.* [https://arxiv.org/abs/1409.0473](https://arxiv.org/abs/1409.0473)
 
