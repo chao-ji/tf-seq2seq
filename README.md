@@ -5,7 +5,7 @@
 </p>
 
 
-This is a TensorFlow 2.x implementation of the seq2seq model augmented with attention mechanism for neural machine translation. Follow this [guide](https://github.com/chao-ji/tf-seq2seq/blob/master/g3doc/Build_seq2seq_model.md) for a conceptual understanding about how seq2seq model works. 
+This is a TensorFlow 2.x implementation of the seq2seq model augmented with attention mechanism (Luong-style or Bahdanau-style) for neural machine translation. Follow this [guide](https://github.com/chao-ji/tf-seq2seq/blob/master/g3doc/Build_seq2seq_model.md) for a conceptual understanding about how seq2seq model works. 
 
 
 ## Data Preparation, Training, Evaluation, Attention Weights Visualization 
@@ -19,4 +19,7 @@ Unlike [Transformer](https://github.com/chao-ji/tf-transformer), the seq2seq mod
   English-to-German Translation 
 </p>
 
+# References
+* Effective Approaches to Attention-based Neural Machine Translation, Luong *et al.* [Link](https://arxiv.org/abs/1508.04025)
+* Neural Machine Translation by Jointly Learning to Align and Translate, Bahdanau *et al.* [Link] (https://arxiv.org/abs/1409.0473)
 

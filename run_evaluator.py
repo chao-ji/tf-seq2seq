@@ -14,6 +14,9 @@ flags.DEFINE_integer(
     'hidden_size', 512, 'The dimensionality of the embedding vector.')
 flags.DEFINE_float(
     'dropout_rate', 0.2, 'Dropout rate for the Dropout layers.')
+flags.DEFINE_string(
+    'attention_model', 'luong', 'Type of attention model '
+        '("luong" or "bahdanau").')
 
 flags.DEFINE_integer(
     'extra_decode_length', 50, 'The max decode length would be'
@@ -52,6 +55,7 @@ def main(_):
 
   hidden_size = FLAGS.hidden_size
   dropout_rate = FLAGS.dropout_rate
+  attention_model = FLAGS.attention_model
 
   extra_decode_length = FLAGS.extra_decode_length
   beam_width = FLAGS.beam_width
@@ -69,6 +73,7 @@ def main(_):
   model = Seq2SeqModel(subtokenizer.vocab_size, 
                        hidden_size,
                        dropout_rate=dropout_rate,
+                       attention_model=attention_model,
                        extra_decode_length=extra_decode_length,
                        beam_width=beam_width,
                        alpha=alpha)

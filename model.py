@@ -224,6 +224,62 @@ class Decoder(tf.keras.layers.Layer):
     return decoder_outputs
 
 
+class BahdanauAttention(tf.keras.layers.Layer):
+  """Bahdanau-style additive attention mechanism."""
+  def __init__(self, hidden_size):
+    """Constructor.
+
+    Args:
+      hidden_size: int scalar, the hidden size of continuous representation.
+    """
+    super(BahdanauAttention, self).__init__()
+    self._hidden_size = hidden_size
+
+    self._dense_query = tf.keras.layers.Dense(self._hidden_size,
+        use_bias=False,
+        kernel_initializer='glorot_uniform')
+    self._dense_memory = tf.keras.layers.Dense(self._hidden_size,
+        use_bias=False,
+        kernel_initializer='glorot_uniform')
+    self._dense_score = tf.keras.layers.Dense(1, 
+        use_bias=False,
+        kernel_initializer='glorot_uniform')
+    self._dense_attention = tf.keras.layers.Dense(self._hidden_size,
+        use_bias=False,
+        kernel_initializer='glorot_uniform')
+
+  def call(self, query, encoder_outputs, padding_mask):
+    """Computes the outputs of Bahdanau-style attention mechanism.
+
+    Args:
+      query: float tensor of shape [batch_size, hidden_size], the embeddings
+        of tokens at a single decoding step.
+      encoder_outputs: float tensor of shape [batch_size, src_seq_len, 
+        hidden_size*2], the encoded source sequences to be used as reference.
+      padding_mask: float tensor of shape [batch_size, src_seq_len], populated 
+        with either 0 (for tokens to keep) or 1 (for tokens to be masked).
+
+    Returns:
+      attention_outputs: float tensor of shape [batch_size, hidden_size], the
+        outputs of attention mechanism.
+      attention_weights: float tensor of shape [batch_size, src_seq_len], the
+        amount of attention to tokens in source sequences.
+    """
+    reference = self._dense_memory(encoder_outputs)
+
+    attention_weights = tf.squeeze(self._dense_score(tf.nn.tanh(
+        self._dense_query(tf.expand_dims(query, axis=1)) + 
+        reference)), axis=2)
+    attention_weights += padding_mask * NEG_INF
+    attention_weights = tf.nn.softmax(attention_weights, axis=1)
+
+    context = tf.reduce_sum(
+        tf.expand_dims(attention_weights, axis=2) * reference, axis=1)
+    attention_outputs = self._dense_attention(
+        tf.concat([query, context], axis=1))
+    return attention_outputs, attention_weights
+
+
 class LuongAttention(tf.keras.layers.Layer):
   """Luong-style multiplicative attention mechanism."""
   def __init__(self, hidden_size):
@@ -235,16 +291,14 @@ class LuongAttention(tf.keras.layers.Layer):
     super(LuongAttention, self).__init__()
     self._hidden_size = hidden_size
 
-    self._kernel_memory = self.add_weight(shape=(
-        2*self._hidden_size, self._hidden_size),
-        initializer='glorot_uniform',
-        name='kernel_memory')
-    self._kernel_attention = self.add_weight(shape=(
-        3*self._hidden_size, self._hidden_size),
-        initializer='glorot_uniform',
-        name='kernel_attention')
-    self._scalar = self.add_weight(shape=(), 
-        initializer='ones', name='scalar')
+    self._dense_memory = tf.keras.layers.Dense(
+        self._hidden_size, 
+        use_bias=False,
+        kernel_initializer='glorot_uniform')
+    self._dense_attention = tf.keras.layers.Dense(
+        self._hidden_size, 
+        use_bias=False,
+        kernel_initializer='glorot_uniform')
 
   def call(self, query, encoder_outputs, padding_mask):
     """Computes the outputs of Luong-style attention mechanism.
@@ -266,10 +320,11 @@ class LuongAttention(tf.keras.layers.Layer):
     batch_size, hidden_size = query.shape
 
     # [batch_size, src_seq_len, hidden_size]
-    reference = tf.matmul(encoder_outputs, self._kernel_memory)
+    reference = self._dense_memory(encoder_outputs)
+
     # [batch_size, src_seq_len]
     attention_weights = tf.reduce_sum(
-        reference * tf.expand_dims(query, axis=1), axis=2) * self._scalar
+        reference * tf.expand_dims(query, axis=1), axis=2)
     attention_weights += padding_mask * NEG_INF
     attention_weights = tf.nn.softmax(attention_weights, axis=1)
 
@@ -278,8 +333,9 @@ class LuongAttention(tf.keras.layers.Layer):
         * encoder_outputs, axis=1)
 
     # [batch_size, hidden_size]
-    attention_outputs = tf.matmul(
-        tf.concat([query, context], axis=1), self._kernel_attention)
+    attention_outputs = self._dense_attention(
+        tf.concat([query, context], axis=1))
+
     return attention_outputs, attention_weights
 
 
@@ -287,7 +343,8 @@ class DecoderCell(tf.keras.layers.AbstractRNNCell):
   """Decoder cell that consists of a stacked 2-layer LSTM cell augmented with
   attention mechanism.
   """
-  def __init__(self, hidden_size, dropout_rate, **kwargs):
+  def __init__(
+      self, hidden_size, dropout_rate, attention_model='luong', **kwargs):
     """Constructor.
 
     Args:
@@ -299,7 +356,8 @@ class DecoderCell(tf.keras.layers.AbstractRNNCell):
     self._hidden_size = hidden_size
 
     self._dropout_layer = tf.keras.layers.Dropout(dropout_rate)
-    self._luong_attention = LuongAttention(hidden_size)
+    self._attention = (LuongAttention(hidden_size) if attention_model == 'luong'
+                       else BahdanauAttention(hidden_size))
 
   @property
   def state_size(self):
@@ -408,14 +466,13 @@ class DecoderCell(tf.keras.layers.AbstractRNNCell):
     """
     encoder_outputs, padding_mask = constants
     inputs = tf.concat([inputs, states[2]], axis=1)
-    #print(inputs.shape, states[0][0].shape, states[0][1].shape, states[1][0].shape, states[1][1].shape)
 
     h1, c1 = self._run_single_layer(inputs, states[0][0], states[0][1], 0)
     h1 = self._dropout_layer(h1)
     h2, c2 = self._run_single_layer(h1, states[1][0], states[1][1], 1) 
     h2 = self._dropout_layer(h2) 
 
-    outputs, weights = self._luong_attention(h2, encoder_outputs, padding_mask)
+    outputs, weights = self._attention(h2, encoder_outputs, padding_mask)
     if cache is not None:
       cache['tgt_src_attention'] = tf.concat(
           [cache['tgt_src_attention'], tf.expand_dims(weights, axis=1)], axis=1)
@@ -436,6 +493,7 @@ class Seq2SeqModel(tf.keras.Model):
   def __init__(self, 
                vocab_size, 
                hidden_size,
+               attention_model='luong',
                dropout_rate=0.2,
                extra_decode_length=50,
                beam_width=4,
@@ -462,7 +520,7 @@ class Seq2SeqModel(tf.keras.Model):
     self._alpha = alpha 
 
     self._encoder = Encoder(hidden_size, dropout_rate)
-    self._decoder_cell = DecoderCell(hidden_size, dropout_rate)
+    self._decoder_cell = DecoderCell(hidden_size, dropout_rate, attention_model)
     self._decoder = Decoder(
         hidden_size, self._decoder_cell)
     self._embedding_logits_layer = EmbeddingLayer(vocab_size, hidden_size)

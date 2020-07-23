@@ -26,6 +26,9 @@ flags.DEFINE_integer(
     'hidden_size', 512, 'The dimensionality of the embedding vector.')
 flags.DEFINE_float(
     'dropout_rate', 0.1, 'Dropout rate for the Dropout layers.')
+flags.DEFINE_string(
+    'attention_model', 'luong', 'Type of attention model '
+        '("luong" or "bahdanau").')
 
 flags.DEFINE_integer(
     'batch_size', 128, 'Static batch size.')
@@ -60,32 +63,6 @@ flags.DEFINE_integer(
     'save_ckpt_per_steps', 5000, 'Every this num of steps to save checkpoint.')
 
 
-
-#vocab_path = '/home/chaoji/Desktop/git/tf-transformer/ende/data/vocab'
-
-
-#hidden_size = 512
-
-
-
-#batch_size = 128
-
-#max_length = 64
-#num_parallel_calls = 8
-#data_dir = '/home/chaoji/Desktop/git/tf-transformer/ende/data'
-
-#learning_rate = 2.0
-#learning_rate_warmup_steps = 16000
-#optimizer_adam_beta1 = 0.9
-#optimizer_adam_beta2 = 0.997
-#optimizer_adam_epsilon = 1e-9
-
-#model_dir = 'ckpt'
-#num_steps = 100000
-#save_ckpt_per_steps = 5000
-
-#label_smoothing = 0.1
-
 FLAGS = flags.FLAGS
 
 def main(_):
@@ -95,6 +72,7 @@ def main(_):
 
   hidden_size = FLAGS.hidden_size
   dropout_rate = FLAGS.dropout_rate
+  attention_model = FLAGS.attention_model
 
   batch_size = FLAGS.batch_size
   num_buckets = FLAGS.num_buckets
@@ -117,7 +95,8 @@ def main(_):
   vocab_size = subtokenizer.vocab_size
   model = Seq2SeqModel(vocab_size=vocab_size, 
                        hidden_size=hidden_size,
-                       dropout_rate=dropout_rate)
+                       dropout_rate=dropout_rate,
+                       attention_model=attention_model)
 
   # training dataset
   builder = dataset.StaticBatchDatasetBuilder(
