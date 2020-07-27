@@ -9,7 +9,7 @@ This is a TensorFlow 2.x implementation of the seq2seq model augmented with atte
 
 
 ## Data Preparation, Training, Evaluation, Attention Weights Visualization 
-The implementation of **seq2seq** model is designed to have the same command line inference face as the [Transformer](https://github.com/chao-ji/tf-transformer) implementation. Follow that link for detailed instructions on data preparation, training, evaluation and attention weights visualization.
+The implementation in this repo is designed to have the same command line interface as the [Transformer](https://github.com/chao-ji/tf-transformer) implementation. Follow that link for detailed instructions on data preparation, training, evaluation and attention weights visualization.
 
 ### Visualize Attention Weights 
 Unlike [Transformer](https://github.com/chao-ji/tf-transformer), the seq2seq model augmented with attention mechanism involves only *target-to-source* attention. Shown below is the attention weights w.r.t each source token (English) when translating the target token (German) one at a time.
