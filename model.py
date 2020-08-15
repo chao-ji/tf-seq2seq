@@ -3,116 +3,11 @@ import numpy as np
 import tensorflow as tf
 
 import utils
-
-from data.tokenization import SOS_ID
-from data.tokenization import EOS_ID
-from data.beam_search import NEG_INF
-from data import beam_search
-
-
-class EmbeddingLayer(tf.keras.layers.Layer):
-  """The customized layer that operates in Embedding mode or Logits mode.
-
-  - Embedding mode converts token ids to embedding vectors.
-    Input: [batch_size(N), seq_len(T)]
-    Weight: [vocab_size(V), hidden_size(D)]
-    Output: [batch_size(N), seq_len(T), hidden_size(D)]
-  
-  - Logits mode converts embedding vectors to logits.
-    Input: [batch_size(N), seq_len(T), hidden_size(D)]
-    Weight: [vocab_size(V), hidden_size(D)]
-    Output: [batch_size(N), seq_len(T), vocab_size(V)]
-
-  Note that Logits mode reuses the same weight matrix in Embedding mode.
-  """
-  def __init__(self, vocab_size, hidden_size):
-    """Constructor.
-
-    Args:
-      vocab_size: int scalar, num of tokens (including SOS and EOS) in the 
-        vocabulary.
-      hidden_size: int scalar, the hidden size of continuous representation.
-    """
-    super(EmbeddingLayer, self).__init__()
-    self._vocab_size = vocab_size
-    self._hidden_size = hidden_size
-    self.add_weight('weights',
-                    shape=[vocab_size, hidden_size],
-                    initializer=tf.keras.initializers.RandomNormal(
-                        mean=0., stddev=hidden_size ** -0.5))
-
-  def call(self, inputs, mode):
-    """Either converts token ids to embeddings, or embeddings to logits.
-
-    Args:
-      inputs: int tensor of shape [batch_size, seq_len] in "embedding" mode, the
-        sequences token ids; or float tensor of shape [batch_size, seq_len, 
-        hidden_size] in "logits" mode, the sequences in continuous 
-        representation.
-      mode: string scalar, "embedding" or "logits".
-
-    Returns:
-      outputs: float tensor of shape [batch_size, seq_len, hidden_size] in 
-        "embedding" mode, the sequences in continuous representation; or float 
-        tensor of shape [batch_size, seq_len, vocab_size] in "logits" mode, the
-        logits preceding the softmax.
-    """
-    if mode == 'embedding':
-      outputs = self._tokens_to_embeddings(inputs)
-    elif mode == 'logits':
-      outputs = self._embeddings_to_logits(inputs)
-    else:
-      raise ValueError('Invalid mode {}'.format(mode))
-    return outputs
-
-  def _get_vocab_embeddings(self):
-    """Returns the embedding matrix (of shape [vocab_size, hidden_size]). Note 
-    that SOS token (index 0) has a fixed (not trainable) zero embedding vector.
-    """
-    return tf.pad(self.weights[0][1:], [[1, 0], [0, 0]])
-
-  def _tokens_to_embeddings(self, inputs):
-    """The dense layer that converts token IDs to embedding vectors.
-
-    Args:
-      inputs: int tensor of shape [batch_size, seq_len], the sequences token 
-        ids.
-
-    Returns:
-      embeddings: float tensor of shape [batch_size, seq_len, hidden_size], the
-        sequences in continuous representation.
-    """
-    # [vocab_size, hidden_size]
-    embeddings = self._get_vocab_embeddings()
-
-    # [batch_size, seq_len, hidden_size]
-    embeddings = tf.gather(embeddings, inputs)
-
-    embeddings *= self._hidden_size ** 0.5
-    embeddings = tf.cast(embeddings, 'float32')
-    return embeddings
-
-  def _embeddings_to_logits(self, decoder_outputs):
-    """The dense layer preceding the softmax that computes the logits.
-
-    Args:
-      decoder_outputs: float tensor of shape [batch_size, tgt_seq_len, 
-        hidden_size], the sequences in continuous representation.
-
-    Returns:
-      logits: float tensor of shape [batch_size, tgt_seq_len, vocab_size], the
-        logits preceding the softmax.
-    """
-    # [vocab_size, hidden_size]
-    embeddings = self._get_vocab_embeddings()
-    batch_size = tf.shape(decoder_outputs)[0]
-    tgt_seq_len = tf.shape(decoder_outputs)[1]
-
-    # [batch_size * tgt_seq_len, hidden_size]
-    decoder_outputs = tf.reshape(decoder_outputs, [-1, self._hidden_size])
-    logits = tf.matmul(decoder_outputs, embeddings, transpose_b=True)
-    logits = tf.reshape(logits, [batch_size, tgt_seq_len, self._vocab_size])
-    return logits
+from commons.tokenization import SOS_ID
+from commons.tokenization import EOS_ID
+from commons.beam_search import NEG_INF
+from commons.layers import EmbeddingLayer
+from commons import beam_search
 
 
 class Encoder(tf.keras.layers.Layer):
@@ -183,8 +78,7 @@ class Decoder(tf.keras.layers.Layer):
            fw_states, 
            bw_states, 
            encoder_outputs, 
-           src_padding_mask, 
-           tgt_padding_mask, 
+           padding_mask, 
            training=False):
     """Computes the output of the decoder RNN layers.
 
@@ -199,10 +93,7 @@ class Decoder(tf.keras.layers.Layer):
         backward going LSTM layer.
       encoder_outputs: float tensor of shape [batch_size, src_seq_len, 
         hidden_size*2], the encoded source sequences to be used as reference.
-      src_padding_mask: float tensor of shape [batch_size, src_seq_len], 
-        populated with either 0 (for tokens to keep) or 1 (for tokens to be 
-        masked).
-      tgt_padding_mask: float tensor of shape [batch_size, tgt_seq_len], 
+      padding_mask: float tensor of shape [batch_size, src_seq_len], 
         populated with either 0 (for tokens to keep) or 1 (for tokens to be 
         masked).
       training: bool scalar, True if in training mode.
@@ -217,10 +108,9 @@ class Decoder(tf.keras.layers.Layer):
          bw_states,
          tf.zeros((tgt_token_embeddings.shape[0], self._hidden_size), 
              dtype='float32')],
-        [encoder_outputs, src_padding_mask], 
+        [encoder_outputs, padding_mask], 
         training=training)
 
-    decoder_outputs *= (1 - tgt_padding_mask[..., tf.newaxis])
     return decoder_outputs
 
 
@@ -539,8 +429,7 @@ class Seq2SeqModel(tf.keras.Model):
     Returns:
       logits: float tensor of shape [batch_size, tgt_seq_len, vocab_size].
     """
-    src_padding_mask = utils.get_padding_mask(src_token_ids)
-    tgt_padding_mask = utils.get_padding_mask(tgt_token_ids)
+    padding_mask = utils.get_padding_mask(src_token_ids)
 
     src_token_embeddings = self._embedding_logits_layer(
         src_token_ids, 'embedding')
@@ -548,13 +437,12 @@ class Seq2SeqModel(tf.keras.Model):
         tgt_token_ids, 'embedding')
 
     encoder_outputs, fw_states, bw_states = self._encoder(
-        src_token_embeddings, src_padding_mask, training=True)
+        src_token_embeddings, padding_mask, training=True)
     decoder_outputs = self._decoder(tgt_token_embeddings,
                                     fw_states,
                                     bw_states,
                                     encoder_outputs,
-                                    src_padding_mask,
-                                    tgt_padding_mask,
+                                    padding_mask,
                                     training=True)
 
     logits = self._embedding_logits_layer(decoder_outputs, 'logits') 
@@ -587,14 +475,14 @@ class Seq2SeqModel(tf.keras.Model):
 
     src_token_embeddings = self._embedding_logits_layer(
         src_token_ids, 'embedding')
-    src_padding_mask = utils.get_padding_mask(src_token_ids)
+    padding_mask = utils.get_padding_mask(src_token_ids)
     encoder_outputs, fw_states, bw_states = self._encoder(
-        src_token_embeddings, src_padding_mask, training=False)
+        src_token_embeddings, padding_mask, training=False)
     decoding_cache = {'fw_states': fw_states,
                       'bw_states': bw_states,
                       'attention_states': tf.zeros((batch_size, hidden_size)),
                       'encoder_outputs': encoder_outputs,
-                      'src_padding_mask': src_padding_mask,
+                      'padding_mask': padding_mask,
                       'tgt_src_attention': tf.zeros((batch_size, 0, src_seq_len))
                       }
     sos_ids = tf.ones([batch_size], dtype='int32') * SOS_ID
@@ -642,7 +530,7 @@ class Seq2SeqModel(tf.keras.Model):
             [batch_size*beam_width, hidden_size] 
           'encoder_outputs': float tensor of shape 
             [batch_size*beam_width, src_seq_len, hidden_size*2]
-          'src_padding_mask': float tensor of shape 
+          'padding_mask': float tensor of shape 
             [batch_size*beam_width, src_seq_len].
           'tgt_src_attention': float tensor of shape 
             [batch_size*beam_width, seq_len, src_seq_len].
@@ -658,7 +546,7 @@ class Seq2SeqModel(tf.keras.Model):
       bw_states = cache['bw_states']
       attention_states = cache['attention_states']
       encoder_outputs = cache['encoder_outputs']
-      src_padding_mask = cache['src_padding_mask']
+      padding_mask = cache['padding_mask']
 
       # [batch_size * beam_width, 1, hidden_size]
       decoder_input = self._embedding_logits_layer(decoder_input, 'embedding')
@@ -668,7 +556,7 @@ class Seq2SeqModel(tf.keras.Model):
       decoder_outputs, states = self._decoder_cell(
           decoder_input, 
           (fw_states, bw_states, attention_states),
-          (encoder_outputs, src_padding_mask),
+          (encoder_outputs, padding_mask),
           cache=cache)
       fw_states, bw_states, attention_states = states
 

@@ -4,10 +4,9 @@ import numpy as np
 from absl import app
 from absl import flags
 
-from data import tokenization
-
-from data.tokenization import SOS_ID
-from data.tokenization import EOS_ID
+from commons import tokenization
+from commons.tokenization import SOS_ID
+from commons.tokenization import EOS_ID
 
 
 flags.DEFINE_string(
