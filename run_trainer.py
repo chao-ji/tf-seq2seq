@@ -26,9 +26,9 @@ flags.DEFINE_integer(
     'hidden_size', 512, 'The dimensionality of the embedding vector.')
 flags.DEFINE_float(
     'dropout_rate', 0.1, 'Dropout rate for the Dropout layers.')
-flags.DEFINE_string(
-    'attention_model', 'luong', 'Type of attention model '
-        '("luong" or "bahdanau").')
+flags.DEFINE_enum(
+    'attention_model', 'luong', ['luong', 'bahdanau'], 'Type of attention'
+        'mechanism.')
 
 flags.DEFINE_integer(
     'batch_size', 128, 'Static batch size.')

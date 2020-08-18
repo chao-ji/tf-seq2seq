@@ -14,9 +14,9 @@ flags.DEFINE_integer(
     'hidden_size', 512, 'The dimensionality of the embedding vector.')
 flags.DEFINE_float(
     'dropout_rate', 0.2, 'Dropout rate for the Dropout layers.')
-flags.DEFINE_string(
-    'attention_model', 'luong', 'Type of attention model '
-        '("luong" or "bahdanau").')
+flags.DEFINE_enum(
+    'attention_model', 'luong', ['luong', 'bahdanau'], 'Type of attention'
+        'mechanism.')
 
 flags.DEFINE_integer(
     'extra_decode_length', 50, 'The max decode length would be'
@@ -80,6 +80,9 @@ def main(_):
 
   ckpt = tf.train.Checkpoint(model=model)
   latest_ckpt = tf.train.latest_checkpoint(model_dir)
+  if latest_ckpt is None:
+      raise ValueError('No checkpoint is found in %s' % model_dir)
+  print('Loaded latest checkpoint ', latest_ckpt)
   ckpt.restore(latest_ckpt).expect_partial()
 
   # build evaluator

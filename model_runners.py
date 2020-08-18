@@ -120,7 +120,7 @@ class SequenceTransducerTrainer(object):
             (step.numpy(), loss.numpy()), lr.numpy())
       if step.numpy() % persist_per_iterations == 0:
         print('Saving checkpoint at global step %d ...' % step.numpy())
-        ckpt.save(os.path.join(ckpt_path, 'transformer'))
+        ckpt.save(os.path.join(ckpt_path, 'seq2seq'))
 
       if step.numpy() == num_iterations:
         break

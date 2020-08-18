@@ -404,6 +404,7 @@ class Seq2SeqModel(tf.keras.Model):
     super(Seq2SeqModel, self).__init__()
     self._vocab_size = vocab_size
     self._hidden_size = hidden_size
+    self._attention_model = attention_model
     self._dropout_rate = dropout_rate
     self._extra_decode_length = extra_decode_length
     self._beam_width = beam_width
