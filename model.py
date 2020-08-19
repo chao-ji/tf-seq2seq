@@ -263,7 +263,7 @@ class DecoderCell(tf.keras.layers.AbstractRNNCell):
             (self._hidden_size, self._hidden_size),
             (self._hidden_size,)]
 
-  def call(self, inputs, states, constants, cache=None):
+  def call(self, inputs, states, constants, cache=None, training=False):
     """Computes the outputs of decoder cell.
 
     Args:
@@ -293,8 +293,8 @@ class DecoderCell(tf.keras.layers.AbstractRNNCell):
     encoder_outputs, padding_mask = constants
     inputs = tf.concat([inputs, states[2]], axis=1)
 
-    _, (h1, c1) = self._lstm1(inputs, [states[0][0], states[0][1]])
-    _, (h2, c2) = self._lstm2(h1, [states[1][0], states[1][1]])
+    _, (h1, c1) = self._lstm1(inputs, [states[0][0], states[0][1]], training=training)
+    _, (h2, c2) = self._lstm2(h1, [states[1][0], states[1][1]], training=training)
 
     outputs, weights = self._attention(h2, encoder_outputs, padding_mask)
     if cache is not None:
@@ -492,7 +492,8 @@ class Seq2SeqModel(tf.keras.Model):
           decoder_input, 
           (fw_states, bw_states, attention_states),
           (encoder_outputs, padding_mask),
-          cache=cache)
+          cache=cache,
+          training=False)
       fw_states, bw_states, attention_states = states
 
       decoder_outputs = tf.expand_dims(decoder_outputs, axis=1)
