@@ -12,8 +12,6 @@ from model_runners import SequenceTransducerEvaluator
 
 flags.DEFINE_integer(
     'hidden_size', 512, 'The dimensionality of the embedding vector.')
-flags.DEFINE_float(
-    'dropout_rate', 0.2, 'Dropout rate for the Dropout layers.')
 flags.DEFINE_enum(
     'attention_model', 'luong', ['luong', 'bahdanau'], 'Type of attention'
         'mechanism.')
@@ -54,7 +52,6 @@ def main(_):
   model_dir = FLAGS.model_dir
 
   hidden_size = FLAGS.hidden_size
-  dropout_rate = FLAGS.dropout_rate
   attention_model = FLAGS.attention_model
 
   extra_decode_length = FLAGS.extra_decode_length
@@ -72,8 +69,8 @@ def main(_):
   vocab_size = subtokenizer.vocab_size
   model = Seq2SeqModel(subtokenizer.vocab_size, 
                        hidden_size,
-                       dropout_rate=dropout_rate,
                        attention_model=attention_model,
+                       dropout_rate=0.0,
                        extra_decode_length=extra_decode_length,
                        beam_width=beam_width,
                        alpha=alpha)

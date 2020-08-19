@@ -23,8 +23,9 @@ class Encoder(tf.keras.layers.Layer):
     self._hidden_size = hidden_size
     self._dropout_rate = dropout_rate
 
-    self._recurrent_layer = tf.keras.layers.Bidirectional(tf.keras.layers.RNN(
-        [tf.keras.layers.LSTMCell(self._hidden_size, dropout=dropout_rate)],
+    self._recurrent_layer = tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(
+        self._hidden_size, 
+        dropout=dropout_rate,
         return_sequences=True,
         return_state=True))
 
@@ -48,10 +49,13 @@ class Encoder(tf.keras.layers.Layer):
         [batch_size, hidden_size]], the "hidden" and "cell" state of the 
         backward going LSTM layer.
     """
-    encoder_outputs, fw_states, bw_states = self._recurrent_layer(
+    result_list = self._recurrent_layer(
         src_token_embeddings, 
-        mask=1 - padding_mask,
+        mask=tf.cast(1 - padding_mask, 'bool'),
         training=training)
+
+    encoder_outputs = result_list[0]
+    fw_states, bw_states = result_list[1:3], result_list[3:5]
     return encoder_outputs, fw_states, bw_states
 
 
@@ -244,10 +248,13 @@ class DecoderCell(tf.keras.layers.AbstractRNNCell):
     """
     super(DecoderCell, self).__init__(**kwargs)
     self._hidden_size = hidden_size
+    self._dropout_rate = dropout_rate
+    self._attention_model = attention_model
 
-    self._dropout_layer = tf.keras.layers.Dropout(dropout_rate)
     self._attention = (LuongAttention(hidden_size) if attention_model == 'luong'
                        else BahdanauAttention(hidden_size))
+    self._lstm1 = tf.keras.layers.LSTMCell(hidden_size, dropout=dropout_rate)
+    self._lstm2 = tf.keras.layers.LSTMCell(hidden_size, dropout=dropout_rate)
 
   @property
   def state_size(self):
@@ -255,77 +262,6 @@ class DecoderCell(tf.keras.layers.AbstractRNNCell):
     return [(self._hidden_size, self._hidden_size),
             (self._hidden_size, self._hidden_size),
             (self._hidden_size,)]
-
-  def build(self, input_shape):
-    """Creates weights of stacked 2-layer LSTM cell.
-
-    Args:
-      input_shape: unused. 
-    """
-    weights1 = self._build_layer(self._hidden_size*2, self._hidden_size, 1)
-    weights2 = self._build_layer(self._hidden_size, self._hidden_size, 2)
-
-    self._kernel_inputs = [weights1[0], weights2[0]]
-    self._kernel_recurrent = [weights1[1], weights2[1]]
-    self._biases = [weights1[2], weights2[2]]
-    
-  def _build_layer(self, input_size, hidden_size, layer_index):
-    """Creates weights of a single LSTM cell.
-
-    Args:
-      input_size: int scalar, hidden size of the input token embedding.
-      hidden_size: int scalar, hidden size of the recurrent states.
-      layer_index: int scalar, index of the layer (1 or 2).
-
-    Returns:
-      kernel_inputs: float tensor of shape [input_size, hidden_size * 4], 
-        the LSTM kernel for the input tensor.
-      kernel_recurrent: float tensor of shape [hidden_size, hidden_size * 4],
-        the LSTM kernel for the recurrent tensor.
-      biases: float tensor of shape [hidden_size * 4], the biases for the LSTM 
-        layer.
-    """
-    kernel_inputs = self.add_weight(
-        shape=(input_size, self._hidden_size*4),
-        initializer='glorot_uniform',
-        name='kernel_inputs_%d' % layer_index)
-    kernel_recurrent = self.add_weight(
-        shape=(hidden_size, self._hidden_size*4),
-        initializer='glorot_uniform',
-        name='kernel_recurrent_%d' % layer_index)
-
-    biases_value = np.zeros((self._hidden_size*4))
-    biases_value[self._hidden_size:self._hidden_size*2] = 1
-    biases = self.add_weight(
-        shape=self._hidden_size*4, 
-        initializer=tf.keras.initializers.Constant(biases_value),
-        name='biases_%d' % layer_index)
-
-    return kernel_inputs, kernel_recurrent, biases
-
-  def _run_single_layer(self, inputs, h, c, layer_index):
-    """Runs the forward pass of a single LSTM layer.
-
-    Args:
-      inputs: float tensor of shape [batch_size, input_size], the input tensor.
-      h: float tensor of shape [batch_size, hidden_size], the "hidden" state
-        of LSTM.
-      c: float tensor of shape [batch_size, hidden_size], the "cell" state of 
-        LSTM.
-      layer_index: int scalar, index of the layer (1 or 2). 
-
-    Returns:
-      h: float tensor of shape [batch_size, hidden_size], the updated "hidden" 
-        state of LSTM.
-      c: float tensor of shape [batch_size, hidden_size], the updated "cell" 
-        state of LSTM.
-    """
-    logits = tf.matmul(inputs, self._kernel_inputs[layer_index]) + tf.matmul(
-        h, self._kernel_recurrent[layer_index]) + self._biases[layer_index]
-    i, f, j, o = tf.split(logits, 4, axis=1)
-    c = tf.sigmoid(f) * c + tf.sigmoid(i) * tf.tanh(j)
-    h = tf.sigmoid(o) * tf.tanh(c)
-    return h, c
 
   def call(self, inputs, states, constants, cache=None):
     """Computes the outputs of decoder cell.
@@ -357,10 +293,8 @@ class DecoderCell(tf.keras.layers.AbstractRNNCell):
     encoder_outputs, padding_mask = constants
     inputs = tf.concat([inputs, states[2]], axis=1)
 
-    h1, c1 = self._run_single_layer(inputs, states[0][0], states[0][1], 0)
-    h1 = self._dropout_layer(h1)
-    h2, c2 = self._run_single_layer(h1, states[1][0], states[1][1], 1) 
-    h2 = self._dropout_layer(h2) 
+    _, (h1, c1) = self._lstm1(inputs, [states[0][0], states[0][1]])
+    _, (h2, c2) = self._lstm2(h1, [states[1][0], states[1][1]])
 
     outputs, weights = self._attention(h2, encoder_outputs, padding_mask)
     if cache is not None:
@@ -384,7 +318,7 @@ class Seq2SeqModel(tf.keras.Model):
                vocab_size, 
                hidden_size,
                attention_model='luong',
-               dropout_rate=0.2,
+               dropout_rate=0.1,
                extra_decode_length=50,
                beam_width=4,
                alpha=0.6):
@@ -484,7 +418,7 @@ class Seq2SeqModel(tf.keras.Model):
                       'attention_states': tf.zeros((batch_size, hidden_size)),
                       'encoder_outputs': encoder_outputs,
                       'padding_mask': padding_mask,
-                      'tgt_src_attention': tf.zeros((batch_size, 0, src_seq_len))
+                      'tgt_src_attention':tf.zeros((batch_size, 0, src_seq_len))
                       }
     sos_ids = tf.ones([batch_size], dtype='int32') * SOS_ID
 
@@ -496,7 +430,7 @@ class Seq2SeqModel(tf.keras.Model):
                                 max_decode_length,
                                 EOS_ID)
 
-    decoded_ids, scores, decoding_cache = bs.search(sos_ids, decoding_cache)           
+    decoded_ids, scores, decoding_cache = bs.search(sos_ids, decoding_cache)
 
     tgt_src_attention = decoding_cache['tgt_src_attention'].numpy()[:, 0]
 
